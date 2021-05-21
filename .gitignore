@@ -1,0 +1,8 @@
+# Let's not store images
+*.png
+# Let's not store ROOT files
+*.root
+# Let's not store the images/ directory or the runs/ directory
+runs/
+images/
+

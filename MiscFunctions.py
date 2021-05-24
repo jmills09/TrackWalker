@@ -2,7 +2,7 @@ import ROOT
 import numpy as np
 
 
-def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None):
+def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None,canv_x=-1,canv_y=-1):
     ROOT.gStyle.SetOptStat(0)
     x_len = np_arr.shape[0]
     y_len = np_arr.shape[1]
@@ -10,9 +10,14 @@ def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_
     for x in range(x_len):
         for y in range(y_len):
             hist.SetBinContent(x+1,y+1,np_arr[x,y])
-    yscale = int(4000.0*np_arr.shape[1]/np_arr.shape[0]-200)
-    canv = ROOT.TCanvas('canv','canv',1000,800)
-    # canv = ROOT.TCanvas('canv','canv',4000,yscale)
+    xscale = 1000
+    yscale = 800
+    if canv_x != -1:
+        xscale = canv_x
+    if canv_y != -1:
+        yscale = canv_y
+    # yscale = int(4000.0*np_arr.shape[1]/np_arr.shape[0]-200)
+    canv = ROOT.TCanvas('canv','canv',xscale,yscale)
 
     hist.SetMaximum(50.0)
     hist.Draw("COLZ")
@@ -62,17 +67,12 @@ def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None):
 
         true_next_pos = targ[im_ix]
         true_next_x, true_next_y = unflatten_pos(true_next_pos,dim)
-        if im_ix == np_images.shape[0]-1:
-            print(pred_next_pos, true_next_pos)
-            print("Targ",dim**2)
         if pred_next_pos == dim**2: # if predicted track end
             pred_next_x = y.shape[0]/2
             pred_next_y = y.shape[1]/2
         if true_next_pos == dim**2: #If true track end
-            print("Changing")
             true_next_x = y.shape[0]/2-0.5
             true_next_y = y.shape[1]/2-0.5
-        print(true_next_x,true_next_y)
         save_im(y,string_pattern+str(im_ix).zfill(3),pred_next_x,pred_next_y,true_next_x,true_next_y)
     return 0
     # save_im(cropped_step_image,'step'+str(idx))
@@ -115,5 +115,6 @@ def cropped_np(np_arr,x_center,y_center,padding):
     x_end = x_center+padding+padding+1
     y_st = y_center
     y_end = y_center+padding+padding+1
-    new_arr = pad_arr[x_st:x_end,y_st:y_end]
+    new_arr = pad_arr[int(x_st):int(x_end),int(y_st):int(y_end)]
+
     return new_arr

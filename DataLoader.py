@@ -4,6 +4,7 @@ from larcv import larcv
 from larlite import larlite
 from array import *
 from larlite import larutil
+from ublarcvapp import ublarcvapp
 
 def is_inside_boundaries(xt,yt,zt,buffer = 0):
     x_in = (xt <  255.999-buffer) and (xt >    0.001+buffer)
@@ -15,7 +16,7 @@ def is_inside_boundaries(xt,yt,zt,buffer = 0):
         return False
 
 
-def getprojectedpixel(meta,x,y,z,t):
+def getprojectedpixel(meta,x,y,z):
 
     nplanes = 3
     fracpixborder = 1.5
@@ -99,7 +100,8 @@ def mctrack_length(mctrack_in):
     return total_dist
 
 
-def load_rootfile(filename,step_dist_3d,step_times):
+def load_rootfile(filename,step_dist_3d, nentries_to_do = -1):
+    truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
     infile = filename
     iocv = larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
     iocv.reverse_all_products() # Do I need this?
@@ -119,6 +121,12 @@ def load_rootfile(filename,step_dist_3d,step_times):
     full_image_list = []
     ev_trk_xpt_list = []
     ev_trk_ypt_list = []
+    runs = []
+    subruns   = []
+    events    = []
+    filepaths = []
+    entries   = []
+    track_pdgs= []
 
     PDG_to_Part = {
     2212:"PROTON",
@@ -132,9 +140,13 @@ def load_rootfile(filename,step_dist_3d,step_times):
     -13:"ANTIMUON",
     }
 
-
-    # for i in range(nentries):
-    for i in range(1):
+    if nentries_to_do != -1 and nentries_to_do < nentries_cv:
+        nentries_cv = nentries_to_do
+    for i in range(nentries_cv):
+    # for i in range(8,9):
+        print()
+        print("Loading Entry:", i, "of", nentries_cv)
+        print()
         iocv.read_entry(i)
         ioll.go_to(i)
 
@@ -146,18 +158,31 @@ def load_rootfile(filename,step_dist_3d,step_times):
         rows = y_wire_image2d.meta().rows()
         cols = y_wire_image2d.meta().cols()
         y_wire_np = np.zeros((cols,rows))
-        for c in range(cols):
-            for r in range(rows):
-                y_wire_np[c][r] = y_wire_image2d.pixel(r,c)
+        # for c in range(cols):
+        #     for r in range(rows):
+        #         y_wire_np[c][r] = y_wire_image2d.pixel(r,c)
+        y_wire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
         full_image_list.append(y_wire_np)
+        runs.append(ev_wire.run())
+        subruns.append(ev_wire.subrun())
+        events.append(ev_wire.event())
+        filepaths.append(infile)
+        entries.append(i)
+
+        print("SHAPE TEST")
+        print(y_wire_np.shape)
 
         # Get MC Track X Y Points
         meta = y_wire_image2d.meta()
         trk_xpt_list = []
         trk_ypt_list = []
+        this_event_track_pdgs = []
         trk_idx = -1
+        print("N Tracks", len(ev_mctrack))
         for mctrack in ev_mctrack:
             trk_idx += 1
+            if mctrack.PdgCode() in PDG_to_Part and PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON"]:
+                continue
             print("Track Index:",trk_idx)
             if mctrack.PdgCode()  in PDG_to_Part:
                 print("     Track PDG:", PDG_to_Part[mctrack.PdgCode()])
@@ -169,36 +194,38 @@ def load_rootfile(filename,step_dist_3d,step_times):
             last_x   = 0
             last_y   = 0
             last_z   = 0
-            last_t   = 0
             step_idx = -1
-            for mcstep in mctrack:
+            sce_track = truthtrack_SCE.applySCE(mctrack)
+            for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
+            # for mcstep in mctrack:
+                sce_step = sce_track.LocationAtPoint(pos_idx)
                 step_idx += 1
-                x = mcstep.X()
-                y = mcstep.Y()
-                z = mcstep.Z()
+                x = sce_step.X()
+                y = sce_step.Y()
+                z = sce_step.Z()
                 if is_inside_boundaries(x,y,z) == False:
                     continue
-                t = mcstep.T()
                 if step_idx != 0:
                     step_dist = ((x-last_x)**2 + (y-last_y)**2 + (z-last_z)**2)**0.5
                     step_dist_3d.append(step_dist)
-                    step_times.append(t-last_t)
                 last_x = x
                 last_y = y
                 last_z = z
-                last_t = t
                 # if trk_idx == 6:
                 #     print(str(round(x)).zfill(4),str(round(y)).zfill(4),str(round(z)).zfill(4),str(round(t)).zfill(4))
-                col,row = getprojectedpixel(meta,x,y,z,t)
+                col,row = getprojectedpixel(meta,x,y,z)
                 if len(xpt_list) !=0 and col == xpt_list[len(xpt_list)-1] and row == ypt_list[len(ypt_list)-1]:
                     continue
                 xpt_list.append(col)
                 ypt_list.append(row)
             trk_xpt_list.append(xpt_list)
             trk_ypt_list.append(ypt_list)
+            this_event_track_pdgs.append(mctrack.PdgCode())
         ev_trk_xpt_list.append(trk_xpt_list)
         ev_trk_ypt_list.append(trk_ypt_list)
-    return full_image_list, ev_trk_xpt_list, ev_trk_ypt_list
+        track_pdgs.append(this_event_track_pdgs)
+    return full_image_list, ev_trk_xpt_list, ev_trk_ypt_list, runs, subruns, events, filepaths, entries, track_pdgs
+
 
 def insert_cropedge_steps(x_pts_list, y_pts_list, padding, always_edge=False):
     # Lists of true x,y points in a track, and the padding of a crop

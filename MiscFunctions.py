@@ -1,6 +1,47 @@
 import ROOT
 import numpy as np
 
+def get_loss_weights(targets, np_pred, dim):
+    np_wgts_full = np.ones((targets.shape[0],dim*dim+1))
+    for idx in range(targets.shape[0]):
+        target = targets[idx]
+        np_wgts = np.ones((dim,dim))
+        if target != dim*dim: #This is the end of track class label
+            targ_x, targ_y = unflatten_pos(target,dim)
+            for x in range(dim):
+                for y in range(dim):
+                    # np_wgts[x][y] = ((targ_x-x)**2 + (targ_y-y)**2)**0.5 #Distance Squared
+                    np_wgts[x][y] = abs(targ_x - x) + abs(targ_y - y) #dx + dy
+        np_wgts[targ_x][targ_y] = 1.0
+        # END_TRACK_WGT = ((dim*1.0/2)**2 + (dim*1.0/2)**2)**0.5 # Like being off by halfway across the image diagonally.
+        END_TRACK_WGT = dim
+        np_wgts_flat = np.append(unravel_array(np_wgts), END_TRACK_WGT)
+        np_wgts_full[idx] = np_wgts_flat
+
+    loss_weights = np.zeros((targets.shape[0]))
+    for i in range(loss_weights.shape[0]):
+        loss_weights[i] = np_wgts_full[i][np_pred[i]]
+
+    return loss_weights
+
+def get_loss_weights_v2(targets, np_pred, dim):
+    loss_weights = np.ones((targets.shape[0]))
+
+    for idx in range(targets.shape[0]):
+        target = targets[idx]
+        pred   = np_pred[idx]
+        if target == pred:
+            loss_weights[idx] = 1.0
+        elif target != dim*dim and pred != dim*dim:
+            targ_x, targ_y = unflatten_pos(target,dim)
+            pred_x, pred_y = unflatten_pos(pred,  dim)
+            loss_weights[idx] = abs(targ_x - pred_x) + abs(targ_y - pred_y)
+        elif target == dim*dim and pred != dim*dim:
+            loss_weights[idx] = (dim+dim) / 2
+        elif target != dim*dim and pred == dim*dim:
+            loss_weights[idx] = (dim+dim) / 2
+    return loss_weights
+
 
 def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None,canv_x=-1,canv_y=-1):
     ROOT.gStyle.SetOptStat(0)
@@ -11,7 +52,7 @@ def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_
         for y in range(y_len):
             hist.SetBinContent(x+1,y+1,np_arr[x,y])
     xscale = 1000
-    yscale = 800
+    yscale =  800
     if canv_x != -1:
         xscale = canv_x
     if canv_y != -1:

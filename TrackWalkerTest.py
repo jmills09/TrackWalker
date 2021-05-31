@@ -9,6 +9,7 @@ import torch.optim as optim
 import numpy as np
 from MiscFunctions import *
 from DataLoader import *
+from ModelFunctions import *
 
 def prepare_sequence(seq, to_ix):
     idxs = [to_ix[w] for w in seq]
@@ -25,19 +26,21 @@ HIDDEN_DIM = 1024
 PADDING = 20
 EMBEDDING_DIM = (PADDING*2+1)*(PADDING*2+1) # N_Features
 NUM_CLASSES = (PADDING*2+1)*(PADDING*2+1)+1 # Bonus Class is for the end of track class
-EPOCHS = 1000
-INFILE = "/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
+EPOCHS = 5000
+# INFILE = "/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
+INFILE = "/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
 REAL_IM = True
 TRACK_IDX = 0
 EVENT_IDX = 0
 ALWAYS_EDGE = True # True points are always placed at the edge of the Padded Box
-DO_TENSORLOG = False
+DO_TENSORLOG = True
 TENSORDIR = None # Default runs/DATE_TIME
-# TENSORDIR = "runs/TESTRUN"
-CLASSIFIER_NOT_DISTANCESHIFTER = False # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
+# TENSORDIR = "runs/Pad20_Hidden1024_500Entries"
+CLASSIFIER_NOT_DISTANCESHIFTER = True # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
 NDIMENSIONS = 2 #Not configured to have 3 yet.
-LEARNING_RATE = 0.0001 # 0.01 is good for the classifier mode,
-
+LEARNING_RATE = 0.01 # 0.01 is good for the classifier mode,
+TRAINING_SIZE = -1 # -1 Means do all, otherwise only include first N training examples
+NENTRIES_TO_DO = 1000 # Entries to read from ROOT File
 
 
 def main():
@@ -56,8 +59,8 @@ def main():
     steps_y = []
     full_image = []
     training_data = []
+    event_ids = []
     step_dist_3d = []
-    step_times   = []
     print()
     print()
     print("Real Image?", REAL_IM)
@@ -68,7 +71,7 @@ def main():
         steps_y = [0,1,2,3,5,6,8,10,11,14,16,17,19,21,22,23,26,28,30,32,33,34,35,39,41,42,44,49]
         full_image = dumb_diag_test(steps_x)
     else:
-        image_list,xs,ys = load_rootfile(INFILE, step_dist_3d,step_times)
+        image_list,xs,ys, runs, subruns, events, filepaths, entries, track_pdgs = load_rootfile(INFILE, step_dist_3d, nentries_to_do = NENTRIES_TO_DO)
         print()
         print()
         # save_im(image_list[EVENT_IDX],"images/EventDisp")
@@ -76,8 +79,8 @@ def main():
             print("Doing Event:", EVENT_IDX)
             print("N MC Tracks:", len(xs[EVENT_IDX]))
             for TRACK_IDX in range(len(xs[EVENT_IDX])):
-                if TRACK_IDX != 0:
-                    continue
+                # if TRACK_IDX != 0:
+                #     continue
                 print("     Doing Track:", TRACK_IDX)
 
                 full_image = image_list[EVENT_IDX]
@@ -102,6 +105,8 @@ def main():
                 flat_next_positions = [] # list of next step positions in flattened single coord idx
                 xy_shifts = [] # list of X,Y shifts to take the next step
                 for idx in range(len(steps_x)):
+                    # if idx > 1:
+                    #     continue
                     step_x = steps_x[idx]
                     step_y = steps_y[idx]
                     next_step_x = -1.0
@@ -131,23 +136,20 @@ def main():
                         xy_shifts.append(np_xy_shift)
                 if CLASSIFIER_NOT_DISTANCESHIFTER:
                     training_data.append((flat_stepped_images,flat_next_positions))
+                    event_ids.append(EVENT_IDX)
                 else:
                     training_data.append((flat_stepped_images,xy_shifts))
+                    event_ids.append(EVENT_IDX)
     cava = ROOT.TCanvas("c","c",1000,800)
-    h_3d = ROOT.TH1D("h3d","h3d",20,0,max(step_dist_3d)+1)
+    h_3d = ROOT.TH1D("h3d","h3d",50,0,50)
     min_t = 0
-    if min(step_times) < 0:
-        min_t = min(step_times) - 1
-    h_t  = ROOT.TH1D("ht","ht",20,min_t,max(step_dist_3d)+1)
     for d in step_dist_3d:
         h_3d.Fill(d)
     h_3d.Draw()
     cava.SaveAs("images/Step3dDist.png")
-    for t in step_times:
-        h_t.Fill(t)
-    h_t.Draw()
-    cava.SaveAs("images/StepTimes.png")
 
+    if TRAINING_SIZE != -1:
+        training_data[0:TRAINING_SIZE]
     print("Number of Training Examples:", len(training_data))
 
         # save_im(cropped_step_image,'step'+str(idx))
@@ -251,7 +253,7 @@ def main():
     loss_function = None
     if CLASSIFIER_NOT_DISTANCESHIFTER:
         output_dim = input_image_dimension*input_image_dimension+1 # nPixels in crop + 1 for 'end of track'
-        loss_function = nn.NLLLoss()
+        loss_function = nn.NLLLoss(reduction='none')
     else:
         output_dim = NDIMENSIONS # Shift X, Shift Y
         loss_function = nn.MSELoss(reduction='sum')
@@ -262,6 +264,7 @@ def main():
 
     print()
     print()
+    step_counter = 0
     for epoch in range(EPOCHS):  # again, normally you would NOT do 300 epochs, it is toy data
         if epoch%50 ==0:
             print()
@@ -269,7 +272,18 @@ def main():
             print("/////////////////////////////////////////////////////////////////////////")
             print("Epoch",epoch)
         train_idx = -1
+
+
+
+        epoch_loss_average = 0
+        epoch_train_acc_exact = 0
+        epoch_train_acc_2dist = 0
+        epoch_train_acc_5dist = 0
+        epoch_train_num_correct_exact = 0
+        epoch_train_average_distance_off = 0
+
         for step_images, next_steps in training_data:
+            step_counter += 1
             train_idx += 1
             # Step 1. Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
@@ -290,80 +304,125 @@ def main():
 
             # print(next_steps_pred_scores.shape,"Tag Scores Shape, Pre Loss")
             # print(targets.shape,"targets Shape, Pre Loss")
-            loss = loss_function(next_steps_pred_scores, targets)
-            loss.backward()
-            optimizer.step()
+
             np_pred = None
             if CLASSIFIER_NOT_DISTANCESHIFTER:
                 np_pred = np.argmax(next_steps_pred_scores.detach().numpy(),axis=1)
             else:
                 np_pred = np.rint(next_steps_pred_scores.detach().numpy()) # Rounded to integers
-            num_correct = 0
+
+
+
+            loss_weights = torch.tensor(get_loss_weights_v2(targets.detach().numpy(),np_pred,PADDING*2+1),dtype=torch.float)
+            loss = loss_function(next_steps_pred_scores, targets)
+            loss_weighted = loss*loss_weights
+            loss_total = torch.mean(loss_weighted)
+            loss_total.backward()
+            optimizer.step()
+
+            num_correct_exact = 0
+            num_correct_2dist = 0
+            num_correct_5dist = 0
+            dists = np.zeros(np_pred.shape[0])
+
             for ix in range(np_pred.shape[0]):
+                targ_x, targ_y = unflatten_pos(np_targ[ix], input_image_dimension)
+                pred_x, pred_y = unflatten_pos(np_pred[ix], input_image_dimension)
+                dists[ix] = ((pred_x - targ_x)**2 + (pred_y - targ_y)**2)**0.5
                 if CLASSIFIER_NOT_DISTANCESHIFTER:
                     if np_pred[ix] == np_targ[ix]:
-                        num_correct = num_correct + 1
+                        num_correct_exact = num_correct_exact + 1
+                    if dists[ix] <= 2.0:
+                        num_correct_2dist += 1
+                    if dists[ix] <= 5.0:
+                        num_correct_5dist += 1
                 else:
                     if np.array_equal(np_pred[ix], np_targ[ix]):
-                        num_correct += 1
+                        num_correct_exact += 1
             if DO_TENSORLOG:
-                writer.add_scalar('Loss/train', loss.detach().numpy(), epoch)
-                writer.add_scalar('Accuracy/train_acc', float(num_correct)/float(np_pred.shape[0]), epoch)
-                writer.add_scalar('Accuracy/train_num_correct', num_correct, epoch)
+                writer.add_scalar('Steps/train_loss', loss_total.detach().numpy(), step_counter)
+                writer.add_scalar('Steps/train_acc_exact', float(num_correct_exact)/float(np_pred.shape[0]), step_counter)
+                writer.add_scalar('Steps/train_acc_2dist', float(num_correct_2dist)/float(np_pred.shape[0]), step_counter)
+                writer.add_scalar('Steps/train_acc_5dist', float(num_correct_5dist)/float(np_pred.shape[0]), step_counter)
+                writer.add_scalar('Steps/train_num_correct_exact', num_correct_exact, step_counter)
+                writer.add_scalar("Steps/train_average_off_distance", np.mean(dists),step_counter)
+                epoch_loss_average += loss_total.detach().numpy()/len(training_data)
+                epoch_train_acc_exact += float(num_correct_exact)/float(np_pred.shape[0])/len(training_data)
+                epoch_train_acc_2dist += float(num_correct_2dist)/float(np_pred.shape[0])/len(training_data)
+                epoch_train_acc_5dist += float(num_correct_5dist)/float(np_pred.shape[0])/len(training_data)
+                epoch_train_num_correct_exact += num_correct_exact/len(training_data)
+                epoch_train_average_distance_off += np.mean(dists)/len(training_data)
 
-            if epoch%50 ==0:
-                print()
-                print("Track:", train_idx)
-                print("Accuracy:")
-                print(float(num_correct)/float(np_pred.shape[0]))
-                # print("Predictions")
-                # for i in range(np_pred.shape[0]):
-                #     print(str(np_pred[i]).zfill(3),end=" ")
-                # print()
-                # print("Targets")
-                # for i in range(np_targ.shape[0]):
-                #     print(str(np_targ[i]).zfill(3),end=" ")
-                # print()
-                print("Loss:")
-                print(loss.detach().numpy())
 
             # if epoch%500 == 0:
             # if epoch==200:
                 # make_steps_images(step_images_in.detach().numpy(),"images/PredStep_"+str(epoch)+"_",PADDING*2+1,pred=np_pred)
-                # make_steps_images(step_images_in.detach().numpy(),"images/PredStep_Progress_",PADDING*2+1,pred=np_pred,targ=np_targ)
-
+            # make_steps_images(step_images_in.detach().numpy(),"images/PredStep_Progress_",PADDING*2+1,pred=np_pred,targ=np_targ)
+        if epoch%50 ==0:
+            print("Epoch Averaged")
+            print("Exact Accuracy:")
+            print(epoch_train_acc_exact)
+            print("Within 2 Accuracy:")
+            print(epoch_train_acc_2dist)
+            print("Within 5 Accuracy:")
+            print(epoch_train_acc_5dist)
+            print("Loss:")
+            print(epoch_loss_average)
+            print("/////////////////////////////")
+            print()
+        if DO_TENSORLOG:
+            writer.add_scalar('Epoch/train_loss', epoch_loss_average, epoch)
+            writer.add_scalar('Epoch/train_acc_exact', epoch_train_acc_exact, epoch)
+            writer.add_scalar('Epoch/train_acc_2dist', epoch_train_acc_2dist, epoch)
+            writer.add_scalar('Epoch/train_acc_5dist', epoch_train_acc_5dist, epoch)
+            writer.add_scalar('Epoch/train_num_correct_exact', epoch_train_num_correct_exact, epoch)
+            writer.add_scalar("Epoch/train_average_off_distance", epoch_train_average_distance_off,epoch)
+        if epoch%2000 == 0:
+            torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(epoch)+".pt")
     print()
     print("End of Training")
     print()
     # See what the scores are after training
     with torch.no_grad():
-        inputs = prepare_sequence_steps(training_data[0][0])
-        is_long = CLASSIFIER_NOT_DISTANCESHIFTER
-        targets = prepare_sequence_steps(training_data[0][1],long=is_long)
+        train_idx = -1
+        for step_images, next_steps in training_data:
+            train_idx += 1
+            print()
+            print("Event:", event_ids[train_idx])
+            print("Track Idx:",train_idx)
+            step_images_in = prepare_sequence_steps(step_images)
 
-        next_steps_pred_scores = model(inputs)
+            targets = prepare_sequence_steps(next_steps,long=is_long)
+            np_targ = targets.detach().numpy()
 
-        # The sentence is "the dog ate the apple".  i,j corresponds to score for tag j
-        # for word i. The predicted tag is the maximum scoring tag.
-        # Here, we can see the predicted sequence below is 0 1 2 0 1
-        # since 0 is index of the maximum value of row 1,
-        # 1 is the index of maximum value of row 2, etc.
-        # Which is DET NOUN VERB DET NOUN, the correct sequence!
-        np_pred = None
-        if CLASSIFIER_NOT_DISTANCESHIFTER:
-            np_pred = np.argmax(next_steps_pred_scores.detach().numpy(),axis=1)
-        else:
-            np_pred = np.rint(next_steps_pred_scores.detach().numpy()) # Rounded to integers
+            next_steps_pred_scores = model(step_images_in)
 
-        np_targ = targets.detach().numpy()
-        if not CLASSIFIER_NOT_DISTANCESHIFTER:
-            print("Predictions Raw")
-            print(next_steps_pred_scores.detach().numpy())
-        print("Predictions")
-        print(np_pred)
-        print("Targets")
-        print(np_targ)
-        # make_steps_images(inputs.detach().numpy(),"images/PredStep_Final_",PADDING*2+1,pred=np_pred,targ=np_targ)
+            np_pred = None
+            if CLASSIFIER_NOT_DISTANCESHIFTER:
+                np_pred = np.argmax(next_steps_pred_scores.detach().numpy(),axis=1)
+            else:
+                np_pred = np.rint(next_steps_pred_scores.detach().numpy()) # Rounded to integers
+            torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(EPOCHS)+"_Fin.pt")
+
+
+
+            num_correct_exact = 0
+            for ix in range(np_pred.shape[0]):
+                if CLASSIFIER_NOT_DISTANCESHIFTER:
+                    if np_pred[ix] == np_targ[ix]:
+                        num_correct_exact = num_correct_exact + 1
+                else:
+                    if np.array_equal(np_pred[ix], np_targ[ix]):
+                        num_correct_exact += 1
+            print("Accuracy",float(num_correct_exact)/float(np_pred.shape[0]))
+            print("Points:",float(np_pred.shape[0]))
+
+            np_targ = targets.detach().numpy()
+            if not CLASSIFIER_NOT_DISTANCESHIFTER:
+                print("Predictions Raw")
+                print(next_steps_pred_scores.detach().numpy())
+
+            # make_steps_images(step_images_in.detach().numpy(),"images/PredStep_Final_"+str(train_idx).zfill(2)+"_",PADDING*2+1,pred=np_pred,targ=np_targ)
     print("End of Main")
     return 0
 

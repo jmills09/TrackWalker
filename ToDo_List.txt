@@ -1,0 +1,27 @@
+Need:
+Create Loss Dynamic During Trainin
+Feed in Convolutional Net Features
+Pulling Train Data and Validation Data dynamically rather than all at once in the beginning
+Accuracy By Particle
+
+Dump Training PARAMS into txt file in the tensorboard folder w/ custom string
+
+Want:
+Size of Accuracy Threshold search area adjustable by hyperparam
+Length of Proposed Step
+Length of Truth Step
+Make some Event Display Images
+Hyperparam Dict into a global variable
+Feed Network the current length of track as input
+
+Done:
+Try L2 Weighting for Loss
+Instead of Track End Class Make center pixel the 'track end'
+Instead of Track End Prediction, use separate head to predict end of tracks
+Accuracy of just placing Endstep
+Accuracy of placing non-end steps
+Doing Validation Set
+Add 10dist Accuracy Threshold search area
+Move Model to Own File ModelFunctions.py
+Change Hyperparams to a dictionary
+Load and format data function to DataLoader.py

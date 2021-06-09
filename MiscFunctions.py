@@ -1,46 +1,113 @@
 import ROOT
 import numpy as np
 
-def get_loss_weights(targets, np_pred, dim):
-    np_wgts_full = np.ones((targets.shape[0],dim*dim+1))
-    for idx in range(targets.shape[0]):
-        target = targets[idx]
-        np_wgts = np.ones((dim,dim))
-        if target != dim*dim: #This is the end of track class label
-            targ_x, targ_y = unflatten_pos(target,dim)
-            for x in range(dim):
-                for y in range(dim):
-                    # np_wgts[x][y] = ((targ_x-x)**2 + (targ_y-y)**2)**0.5 #Distance Squared
-                    np_wgts[x][y] = abs(targ_x - x) + abs(targ_y - y) #dx + dy
-        np_wgts[targ_x][targ_y] = 1.0
-        # END_TRACK_WGT = ((dim*1.0/2)**2 + (dim*1.0/2)**2)**0.5 # Like being off by halfway across the image diagonally.
-        END_TRACK_WGT = dim
-        np_wgts_flat = np.append(unravel_array(np_wgts), END_TRACK_WGT)
-        np_wgts_full[idx] = np_wgts_flat
+def make_log_stat_dict(namestring=''):
+    if namestring != '':
+        if namestring[-1] != "_":
+            namestring = namestring + "_"
+    log_dict = {}
+    log_dict[namestring+'loss_average']= 0
+    log_dict[namestring+'acc_endpoint']= 0
+    log_dict[namestring+'num_correct_exact']= 0
+    log_dict[namestring+'frac_misIDas_endpoint']= 0
+    log_dict[namestring+'acc_exact']= 0
+    log_dict[namestring+'acc_2dist']= 0
+    log_dict[namestring+'acc_5dist']= 0
+    log_dict[namestring+'acc_10dist']= 0
+    log_dict[namestring+'average_distance_off']= 0
+    return log_dict
 
-    loss_weights = np.zeros((targets.shape[0]))
-    for i in range(loss_weights.shape[0]):
-        loss_weights[i] = np_wgts_full[i][np_pred[i]]
+def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, batch_size, is_train=True, is_epoch=True):
+    input_image_dimension = PARAMS['PADDING']*2+1
+    num_correct_endpoint = 0
+    num_mislabeledas_endpoint = 0
+    num_correct_exact = 0
+    num_correct_2dist = 0
+    num_correct_5dist = 0
+    num_correct_10dist = 0
+    prestring = ""
+    if is_epoch:
+        prestring = "epoch_"
+    else:
+        prestring = "step_"
+    if is_train:
+        prestring = prestring + "train_"
+    else:
+        prestring = prestring + "val_"
 
-    return loss_weights
+    dists = []
+    for ix in range(np_pred.shape[0]-1):
+        if np_pred[ix] == PARAMS['TRACKEND_CLASS']:
+            num_mislabeledas_endpoint += 1
+            continue
+        this_dist = get_pred_targ_dist(np_pred[ix],np_targ[ix], input_image_dimension)
+        dists.append(this_dist)
+        if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+            if ix != np_pred.shape[0]-1:
+                if np_pred[ix] == np_targ[ix]:
+                    num_correct_exact = num_correct_exact + 1
+                if this_dist <= 2.0:
+                    num_correct_2dist += 1
+                if this_dist <= 5.0:
+                    num_correct_5dist += 1
+                if this_dist <= 10.0:
+                    num_correct_10dist += 1
+        else:
+            if np.array_equal(np_pred[ix], np_targ[ix]):
+                num_correct_exact += 1
+    # HANDLE CASE FOR last ix (Track End)
+    if np_pred[np_pred.shape[0]-1] == np_targ[np_pred.shape[0]-1]:
+        num_correct_endpoint += 1
 
-def get_loss_weights_v2(targets, np_pred, dim):
+    log_stats_dict[prestring+'loss_average'] += loss_total.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'acc_endpoint'] += float(num_correct_endpoint)/batch_size
+    log_stats_dict[prestring+'num_correct_exact'] += float(num_correct_exact)/batch_size
+    log_stats_dict[prestring+'frac_misIDas_endpoint'] += num_mislabeledas_endpoint/float(np_pred.shape[0]-1)/batch_size
+
+    if len(dists) != 0:
+        log_stats_dict[prestring+'acc_exact'] += float(num_correct_exact)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_2dist'] += float(num_correct_2dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_5dist'] += float(num_correct_5dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_10dist'] += float(num_correct_10dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'average_distance_off'] += np.mean(dists)/batch_size
+    return log_stats_dict
+
+
+def get_loss_weights_v2(targets, np_pred, PARAMS):
+    dim = PARAMS['PADDING']*2+1
     loss_weights = np.ones((targets.shape[0]))
-
+    # These special weights are only used if PARAMS['CENTERPOINT_ISEND'] is false
+    misID_mid_as_end_weight =  1 #float(dim+dim)/2 #(dim+dim) / 2
+    misID_end_as_mid_weight =  0.00001 #float(dim+dim)/2 #(dim+dim) / 2
     for idx in range(targets.shape[0]):
         target = targets[idx]
         pred   = np_pred[idx]
         if target == pred:
             loss_weights[idx] = 1.0
         elif target != dim*dim and pred != dim*dim:
-            targ_x, targ_y = unflatten_pos(target,dim)
-            pred_x, pred_y = unflatten_pos(pred,  dim)
-            loss_weights[idx] = abs(targ_x - pred_x) + abs(targ_y - pred_y)
+            targ_x, targ_y = unflatten_pos(target, dim)
+            pred_x, pred_y = unflatten_pos(pred,   dim)
+            loss_weights[idx] = (abs(targ_x - pred_x)**2 + abs(targ_y - pred_y)**2)#**0.5
         elif target == dim*dim and pred != dim*dim:
-            loss_weights[idx] = (dim+dim) / 2
+            loss_weights[idx] = misID_end_as_mid_weight
         elif target != dim*dim and pred == dim*dim:
-            loss_weights[idx] = (dim+dim) / 2
+            loss_weights[idx] = misID_mid_as_end_weight
     return loss_weights
+
+def get_pred_targ_dist(pred, targ, dim, bad_endstep_dist = 3):
+    if targ == pred:
+        return 0
+    elif targ == dim*dim:
+        # Target was track end and prediction didn't match
+        return bad_endstep_dist
+    elif pred == dim*dim:
+        # Prediction was track end and target didn't match
+        return bad_endstep_dist
+    else:
+        targ_x, targ_y = unflatten_pos(targ, dim)
+        pred_x, pred_y = unflatten_pos(pred, dim)
+        dist = ((targ_x - pred_x)**2 + (targ_y - pred_y)**2)**0.5
+        return dist
 
 
 def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None,canv_x=-1,canv_y=-1):

@@ -10,7 +10,7 @@ larcv.PSet
 from ublarcvapp import ublarcvapp
 from larflow import larflow
 import torch
-import sys
+import os,sys
 sys.path.append('/home/jmills/workdir/ubdl/larflow/larmatchnet')
 from larmatch import LArMatch
 from larmatch_ssnet_classifier import LArMatchSSNetClassifier
@@ -18,126 +18,98 @@ from larmatch_keypoint_classifier import LArMatchKeypointClassifier
 from larmatch_kpshift_regressor   import LArMatchKPShiftRegressor
 from larmatch_affinityfield_regressor import LArMatchAffinityFieldRegressor
 
-def get_larmatch_features_v2(PARAMS, img_2d):
+from ctypes import c_int,c_double
+import numpy as np
+
+class LArMatchConvNet:
+    def __init__(self, PARAMS):
+        self.params    = PARAMS
+
+        checkpointfile = self.params['LARMATCH_CKPT']
+        checkpoint = torch.load( checkpointfile, map_location={"cuda:0":self.params['DEVICE'],
+                                                               "cuda:1":self.params['DEVICE']} )
+        self.adc_producer      = 'wire'
+        self.chstatus_producer = 'wire'
+        self.use_gapch         = True
+        self.use_skip_limit    = None
+        self.use_unet          = True
+        self.supera            = self.params['INFILE']
+        self.has_wirecell      = self.params['MASK_WC']
+        self.tickbackwards     = True
+        self.min_score         = 0.5
+        self.model             = LArMatch(use_unet=self.use_unet).to(self.params['DEVICE'])
+        self.preplarmatch      = larflow.prep.PrepMatchTriplets()
+        self.iomanager         = None # Is Set Below
+        self.nentries          = 0    # Is Set Below
+        self.hitmaker          = None # Is Set Below
+        self.badchmaker        = None # Is Set Below
 
 
-    img_feat = img_2d
-    return img_feat
 
-def get_larmatch_features(PARAMS, img_2d):
-    DEVICE=PARAMS['DEVICE']
-    checkpointfile = PARAMS['LARMATCH_CKPT']
-    checkpoint = torch.load( checkpointfile, map_location={"cuda:0":DEVICE,
-                                                           "cuda:1":DEVICE} )
-    NUM_PAIRS=30000
-    ADC_PRODUCER='wire'
-    CHSTATUS_PRODUCER='wire'
-    USE_GAPCH=True
-    RETURN_TRUTH=False
-    BATCHSIZE = 1
-    ARGS ={}
-    ARGS['use_skip_limit'] = None
-    ARGS['use_unet'] = True
-    ARGS['supera'] = PARAMS['INFILE']
-    ARGS['has_wirecell'] = PARAMS['MASK_WC']
-    ARGS['tickbackwards'] = True
-    ARGS['num_events'] = 1
-    ARGS['min_score'] = 0.5
-    ARGS['has_mc'] = False # no reason to use mc for lf here
-    # DEFINE THE CLASSES THAT MAKE FLOW MATCH VECTORS
-    # we use a config file
-    preplarmatch = larflow.prep.PrepMatchTriplets()
-    if ARGS['use_skip_limit']  is not None:
-        print("Set Triplet Max where we will skip event: ",ARGS['use_skip_limit'] )
-        preplarmatch.setStopAtTripletMax( True, ARGS['use_skip_limit']  )
-
-    # MULTI-HEAD LARMATCH MODEL
-    model_dict = {"larmatch":LArMatch(use_unet=ARGS['use_unet']).to(DEVICE)
-                  # "ssnet":LArMatchSSNetClassifier().to(DEVICE),
-                  # "kplabel":LArMatchKeypointClassifier().to(DEVICE),
-                  # "kpshift":LArMatchKPShiftRegressor().to(DEVICE),
-                  # "paf":LArMatchAffinityFieldRegressor(layer_nfeatures=[64,64,64]).to(DEVICE)
-                  }
-
-    # hack: for runnning with newer version of SCN where group-convolutions are possible
-    for name,arr in checkpoint["state_larmatch"].items():
-        #print(name,arr.shape)
-        if ( ("resnet" in name and "weight" in name and len(arr.shape)==3) or
-             ("stem" in name and "weight" in name and len(arr.shape)==3) or
-             ("unet_layers" in name and "weight" in name and len(arr.shape)==3) or
-             ("feature_layer.weight" == name and len(arr.shape)==3 ) ):
-            print("reshaping ",name)
-            checkpoint["state_larmatch"][name] = arr.reshape( (arr.shape[0], 1, arr.shape[1], arr.shape[2]) )
-
-    for name,model in model_dict.items():
-        # model.load_state_dict(checkpoint["state_"+name])
-        model.eval()
-
-    print("NOT loaded MODEL")
-
-    # setup filename
+        if self.use_skip_limit  is not None:
+            print("Set Triplet Max where we will skip event: ",self.use_skip_limit )
+            self.preplarmatch.setStopAtTripletMax( True, self.use_skip_limit  )
 
 
-    tickdir = larcv.IOManager.kTickForward
-    if ARGS['tickbackwards']:
-        tickdir = larcv.IOManager.kTickBackward
-    io = larcv.IOManager( larcv.IOManager.kREAD, "larcvio", tickdir )
-    io.add_in_file( ARGS['supera'] )
-    io.set_verbosity(1)
-    io.specify_data_read( larcv.kProductImage2D,  "larflow" )
-    io.specify_data_read( larcv.kProductImage2D,  ADC_PRODUCER )
-    io.specify_data_read( larcv.kProductChStatus, CHSTATUS_PRODUCER )
-    if ARGS['has_wirecell']:
-        io.specify_data_read( larcv.kProductChStatus, "thrumu" )
-    io.reverse_all_products()
-    io.initialize()
+        self.model.load_state_dict(checkpoint["state_larmatch"])
+        self.model.eval()
 
-    sigmoid = torch.nn.Sigmoid()
-    ssnet_softmax = torch.nn.Softmax(dim=0)
 
-    NENTRIES = io.get_n_entries()
+        tickdir = larcv.IOManager.kTickForward
+        if self.tickbackwards:
+            tickdir = larcv.IOManager.kTickBackward
+        self.iomanager         = larcv.IOManager( larcv.IOManager.kREAD, "larcvio", tickdir )
+        self.iomanager.add_in_file( self.supera )
+        self.iomanager.set_verbosity(5)
+        self.iomanager.specify_data_read( larcv.kProductImage2D,  "larflow" )
+        self.iomanager.specify_data_read( larcv.kProductImage2D,  self.adc_producer )
+        self.iomanager.specify_data_read( larcv.kProductChStatus, self.chstatus_producer )
+        if self.has_wirecell:
+            self.iomanager.specify_data_read( larcv.kProductChStatus, "thrumu" )
+        self.iomanager.reverse_all_products()
+        self.iomanager.initialize()
 
-    if ARGS['num_events']>0 and ARGS['num_events']<NENTRIES:
-        NENTRIES = ARGS['num_events']
+        self.nentries = self.iomanager.get_n_entries()
 
-    dt_prep  = 0.
-    dt_chunk = 0.
-    dt_net   = 0.
-    dt_save  = 0.
 
-    # setup the hit maker
-    hitmaker = larflow.prep.FlowMatchHitMaker()
-    hitmaker.set_score_threshold( ARGS['min_score'] )
+        # setup the hit maker
+        self.hitmaker = larflow.prep.FlowMatchHitMaker()
+        self.hitmaker.set_score_threshold( self.min_score )
 
-    # setup badch maker
-    badchmaker = ublarcvapp.EmptyChannelAlgo()
+        # setup badch maker
+        self.badchmaker = ublarcvapp.EmptyChannelAlgo()
 
-    # flush standard out buffer before beginning
-    sys.stdout.flush()
+        # flush standard out buffer before beginning
+        sys.stdout.flush()
+        print("Loaded and Initialized MODEL")
 
-    for ientry in range(NENTRIES):
+    def get_larmatch_features(self, entry):
 
-        io.read_entry(ientry)
+        ############################
+        # Entry loop was here:
+        ############################
+        if (entry > self.nentries) or ( entry < 0 ):
+            print("ERROR, entry outside file size", entry, self.nentries)
+            return -1
+
+        t_start_larmatch = time.time()
+
+        self.iomanager.read_entry(entry)
 
         print("==========================================")
-        print("Entry {}".format(ientry))
+        print("LArMatch ConvNet on Entry {}\n\n\n\n\n\n\n".format(entry))
 
         # clear the hit maker
-        hitmaker.clear();
+        self.hitmaker.clear();
+        ev_adc = self.iomanager.get_data(larcv.kProductImage2D, self.adc_producer)
+        adc_v = ev_adc.Image2DArray()
+        ev_badch    = self.iomanager.get_data(larcv.kProductChStatus, self.chstatus_producer)
 
-        adc_v = io.get_data(larcv.kProductImage2D,ADC_PRODUCER).Image2DArray()
-        ev_badch    = io.get_data(larcv.kProductChStatus,CHSTATUS_PRODUCER)
-        if ARGS['has_mc']:
-            print("Retrieving larflow truth...")
-            ev_larflow = io.get_data(larcv.kProductImage2D,"larflow")
-            flow_v     = ev_larflow.Image2DArray()
-
-        if ARGS['has_wirecell']:
+        if self.has_wirecell:
             # make wirecell masked image
-            print("making wirecell masked image")
-            start_wcmask = time.time()
-            ev_wcthrumu = io.get_data(larcv.kProductImage2D,"thrumu")
-            ev_wcwire   = io.get_data(larcv.kProductImage2D,"wirewc")
+            # print("making wirecell masked image")
+            ev_wcthrumu = self.iomanager.get_data(larcv.kProductImage2D,"thrumu")
+            ev_wcwire   = self.iomanager.get_data(larcv.kProductImage2D,"wirewc")
             for p in range(adc_v.size()):
                 adc = larcv.Image2D(adc_v[p]) # a copy
                 np_adc = larcv.as_ndarray(adc)
@@ -146,51 +118,36 @@ def get_larmatch_features(PARAMS, img_2d):
                 masked = larcv.as_image2d_meta( np_adc, adc.meta() )
                 ev_wcwire.Append(masked)
             adc_v = ev_wcwire.Image2DArray()
-            end_wcmask = time.time()
-            print("time to mask: ",end_wcmask-start_wcmask," secs")
 
-        t_badch = time.time()
-        badch_v = badchmaker.makeBadChImage( 4, 3, 2400, 6*1008, 3456, 6, 1, ev_badch )
-        print("Number of badcv images: ",badch_v.size())
-        gapch_v = badchmaker.findMissingBadChs( adc_v, badch_v, 10.0, 100 )
+        badch_v = self.badchmaker.makeBadChImage( 4, 3, 2400, 6*1008, 3456, 6, 1, ev_badch )
+        # print("Number of badcv images: ",badch_v.size())
+        gapch_v = self.badchmaker.findMissingBadChs( adc_v, badch_v, 10.0, 100 )
         for p in range(badch_v.size()):
             for c in range(badch_v[p].meta().cols()):
                 if ( gapch_v[p].pixel(0,c)>0 ):
                     badch_v[p].paint_col(c,255);
-        dt_badch = time.time()-t_badch
-        print( "Made EVENT Gap Channel Image: ",gapch_v.front().meta().dump(), " elasped=",dt_badch," secs")
+        # print( "Made EVENT Gap Channel Image: ",gapch_v.front().meta().dump())
 
         # run the larflow match prep classes
-        t_prep = time.time()
-        preplarmatch.process( adc_v, badch_v, 10.0, False )
-        if ARGS['has_mc']:
-            print("processing larflow truth...")
-            preplarmatch.make_truth_vector( flow_v )
-        t_prep = time.time()-t_prep
-        print("  time to prep matches: ",t_prep,"secs")
-        dt_prep += t_prep
-
-        # for debugging
-        #if True:
-        #    print("stopping after prep")
-        #sys.exit(0)
+        self.preplarmatch.process( adc_v, badch_v, 10.0, False )
 
         # Prep sparse ADC numpy arrays
-        sparse_np_v = [ preplarmatch.make_sparse_image(p) for p in range(3) ]
-        coord_t = [ torch.from_numpy( sparse_np_v[p][:,0:2].astype(np.long) ).to(DEVICE) for p in range(3) ]
-        feat_t  = [ torch.from_numpy( sparse_np_v[p][:,2].reshape(  (coord_t[p].shape[0], 1) ) ).to(DEVICE) for p in range(3) ]
+        sparse_np_v = [ self.preplarmatch.make_sparse_image(p) for p in range(2,3) ]
+        coord_t = [ torch.from_numpy( sparse_np_v[p][:,0:2].astype(np.long) ).to(self.params['DEVICE']) for p in range(0,1) ]
+        feat_t  = [ torch.from_numpy( sparse_np_v[p][:,2].reshape(  (coord_t[p].shape[0], 1) ) ).to(self.params['DEVICE']) for p in range(0,1) ]
 
-        # we can run the whole sparse images through the network
-        #  to get the individual feature vectors at each coodinate
-        t_start = time.time()
-        print("computing features")
+
         with torch.no_grad():
-            for i in range(len(coord_t)):
-                print(coord_t[i].shape)
-                print(feat_t[i].shape)
-            outfeat_u, outfeat_v, outfeat_y = model_dict['larmatch'].forward_features( coord_t[0], feat_t[0],
-                                                                                       coord_t[1], feat_t[1],
-                                                                                       coord_t[2], feat_t[2],
-                                                                                       1, verbose=False )
-    feature_image_y = None
-    return feature_image_y
+            outfeat_y = self.model.forward_features_oneplane( coord_t[0], feat_t[0],
+                                                           1, verbose=False )
+
+        print("\n\n\n\nLArMatch Done\n")
+        print(time.time() - t_start_larmatch, "Seconds for LArMatch\n\n\n\n")
+        # Take output tensor and make it a dense numpy array
+        detach_outfeat_y = outfeat_y.cpu().detach().numpy()
+        detach_outfeat_y = np.reshape(detach_outfeat_y,(outfeat_y.shape[1],outfeat_y.shape[2],outfeat_y.shape[3]))
+        detach_outfeat_y_transposed = np.transpose(detach_outfeat_y,(2,1,0))
+        #slice away the padded extra pixels larmatchnet uses
+        detach_outfeat_y_transposed = detach_outfeat_y_transposed[:,0:1008,:]
+
+        return detach_outfeat_y_transposed, ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()

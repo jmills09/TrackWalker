@@ -5,8 +5,8 @@ from larlite import larlite
 from array import *
 from larlite import larutil
 from ublarcvapp import ublarcvapp
-from MiscFunctions import cropped_np, unravel_array, reravel_array
-from LArMatchModel import get_larmatch_features
+from MiscFunctions import cropped_np, unravel_array, reravel_array, paste_target
+from LArMatchModel import LArMatchConvNet
 
 def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
     # This function takes a root file path, a start entry and an end entry
@@ -15,11 +15,10 @@ def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
     print("Loading Network Inputs")
     steps_x = []
     steps_y = []
-    full_image = []
+    full_images = []
     training_data = []
     event_ids = []
     step_dist_3d = []
-
     image_list, xs, ys, runs, subruns, events, filepaths, entries, track_pdgs = load_rootfile_training(PARAMS, step_dist_3d, START_ENTRY, END_ENTRY)
     print()
     # save_im(image_list[EVENT_IDX],"images/EventDisp")
@@ -50,6 +49,7 @@ def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
             flat_stepped_images = [] # list of cropped images as flattened 1D np array
             next_positions = [] # list of next step positions as np(x,y)
             flat_next_positions = [] # list of next step positions in flattened single coord idx
+            flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
             xy_shifts = [] # list of X,Y shifts to take the next step
             for idx in range(len(steps_x)):
                 # if idx > 1:
@@ -71,12 +71,22 @@ def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
                     target_y = required_padding_y + next_step_y
                     np_step_target = np.array([target_x*1.0,target_y*1.0])
                     flat_np_step_target = target_x*cropped_step_image.shape[1]+target_y
+                    if PARAMS['AREA_TARGET']:
+                        zeros_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
+                        flat_area_positions.append(unravel_array(paste_target(zeros_np,target_x,target_y,PARAMS['TARGET_BUFFER'])))
                     next_positions.append(np_step_target)
                     flat_next_positions.append(flat_np_step_target)
                     np_xy_shift = np.array([target_x*1.0-PARAMS['PADDING'],target_y*1.0-PARAMS['PADDING'] ])
                     xy_shifts.append(np_xy_shift)
                 else:
-                    if PARAMS['CENTERPOINT_ISEND']:
+                    if PARAMS['AREA_TARGET']:
+                        next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
+                        flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
+                        targ_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
+                        flat_area_positions.append(unravel_array(paste_target(targ_np,PARAMS['PADDING'],PARAMS['PADDING'],PARAMS['TARGET_BUFFER']))) #should correspond to centerpoint
+                        np_xy_shift = np.array([0.0,0.0])
+                        xy_shifts.append(np_xy_shift)
+                    elif PARAMS['CENTERPOINT_ISEND']:
                         next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
                         flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
                         np_xy_shift = np.array([0.0,0.0])
@@ -87,10 +97,10 @@ def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
                         np_xy_shift = np.array([0.0,0.0])
                         xy_shifts.append(np_xy_shift)
             if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-                training_data.append((flat_stepped_images,flat_next_positions))
+                training_data.append((stepped_images,flat_next_positions,flat_area_positions))
                 event_ids.append(EVENT_IDX)
             else:
-                training_data.append((flat_stepped_images,xy_shifts))
+                training_data.append((stepped_images,xy_shifts))
                 event_ids.append(EVENT_IDX)
     rse_pdg_dict = {}
     rse_pdg_dict['runs'] = runs
@@ -99,7 +109,7 @@ def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
     rse_pdg_dict['filepaths'] = filepaths
     rse_pdg_dict['pdgs'] = track_pdgs
     rse_pdg_dict['file_idx'] = entries
-    return training_data, full_image, steps_x, steps_y, event_ids, rse_pdg_dict
+    return training_data, full_images, steps_x, steps_y, event_ids, rse_pdg_dict
 
 def is_inside_boundaries(xt,yt,zt,buffer = 0):
     x_in = (xt <  255.999-buffer) and (xt >    0.001+buffer)
@@ -188,7 +198,6 @@ def mcstep_length(step1,step2):
 
 def mctrack_length(mctrack_in):
     total_dist = 0
-
     for step_idx in range(mctrack_in.size()):
         if step_idx != 0:
             total_dist += mcstep_length(mctrack_in[step_idx-1],mctrack_in[step_idx])
@@ -198,20 +207,23 @@ def mctrack_length(mctrack_in):
 def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1):
     truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
     infile = PARAMS['INFILE']
-    iocv = larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
-    iocv.reverse_all_products() # Do I need this?
-    iocv.add_in_file(infile)
-    iocv.initialize()
+    iocv = None
+    LArMatchNet = None
+    if PARAMS['USE_CONV_IM'] == False:
+        iocv =  larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
+        iocv.set_verbosity(5)
+        iocv.reverse_all_products() # Do I need this?
+        iocv.add_in_file(infile)
+        iocv.initialize()
+    else:
+        LArMatchNet = LArMatchConvNet(PARAMS)
     ioll = larlite.storage_manager(larlite.storage_manager.kREAD)
     ioll.add_in_filename(infile)
     ioll.open()
 
-    nentries_cv = iocv.get_n_entries()
+    nentries_ll = ioll.get_entries()
 
-    # Get Rid of those pesky IOManager Warning Messages (orig cxx)
-	# larcv::logger larcv_logger
-	# larcv::msg::Level_t log_level = larcv::msg::kCRITICAL
-	# larcv_logger.force_level(log_level)
+
     full_image_list = []
     ev_trk_xpt_list = []
     ev_trk_ypt_list = []
@@ -234,8 +246,8 @@ def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1
     -13:"ANTIMUON",
     }
 
-    if end_entry > nentries_cv or end_entry == -1:
-        end_entry = nentries_cv
+    if end_entry > nentries_ll or end_entry == -1:
+        end_entry = nentries_ll
     if start_entry > end_entry or start_entry < 0:
         start_entry = 0
     for i in range(start_entry, end_entry):
@@ -243,35 +255,35 @@ def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1
         print()
         print("Loading Entry:", i, "of range", start_entry, end_entry)
         print()
-        iocv.read_entry(i)
+        if PARAMS['USE_CONV_IM'] == False:
+            iocv.read_entry(i)
         ioll.go_to(i)
 
-        ev_wire    = iocv.get_data(larcv.kProductImage2D,"wire")
         ev_mctrack = ioll.get_data(larlite.data.kMCTrack, "mcreco")
         # Get Wire ADC Image to a Numpy Array
-        img_v = ev_wire.Image2DArray()
-        y_wire_image2d = img_v[2]
-        rows = y_wire_image2d.meta().rows()
-        cols = y_wire_image2d.meta().cols()
-        # for c in range(cols):
-        #     for r in range(rows):
-        #         y_wire_np[c][r] = y_wire_image2d.pixel(r,c)
+        meta     = None
+        run      = -1
+        subrun   = -1
+        event    = -1
         if PARAMS['USE_CONV_IM']:
-            y_wire_np = get_larmatch_features(PARAMS, y_wire_image2d)
+            y_wire_np, run, subrun, event, meta = LArMatchNet.get_larmatch_features(i)
         else:
+            ev_wire    = iocv.get_data(larcv.kProductImage2D,"wire")
+            img_v = ev_wire.Image2DArray()
+            y_wire_image2d = img_v[2]
             y_wire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
+            run = ev_wire.run()
+            subrun = ev_wire.subrun()
+            event = ev_wire.event()
+            meta = y_wire_image2d.meta()
         full_image_list.append(y_wire_np)
-        runs.append(ev_wire.run())
-        subruns.append(ev_wire.subrun())
-        events.append(ev_wire.event())
+        runs.append(run)
+        subruns.append(subrun)
+        events.append(event)
         filepaths.append(infile)
         entries.append(i)
-
-        print("SHAPE TEST")
-        print(y_wire_np.shape)
-
         # Get MC Track X Y Points
-        meta = y_wire_image2d.meta()
+
         trk_xpt_list = []
         trk_ypt_list = []
         this_event_track_pdgs = []
@@ -339,12 +351,10 @@ def load_rootfile_deploy(filename, start_entry = 0, end_entry = -1, seed_MC=Fals
     ioll.add_in_filename(infile)
     ioll.open()
 
-    nentries_cv = iocv.get_n_entries()
+    nentries_ll = iocv.get_n_entries()
 
-    # Get Rid of those pesky IOManager Warning Messages (orig cxx)
-	# larcv::logger larcv_logger
-	# larcv::msg::Level_t log_level = larcv::msg::kCRITICAL
-	# larcv_logger.force_level(log_level)
+
+
     full_image_list = []
     x_starts = []
     y_starts = []
@@ -367,8 +377,8 @@ def load_rootfile_deploy(filename, start_entry = 0, end_entry = -1, seed_MC=Fals
     -13:"ANTIMUON",
     }
 
-    if end_entry > nentries_cv or end_entry == -1:
-        end_entry = nentries_cv
+    if end_entry > nentries_ll or end_entry == -1:
+        end_entry = nentries_ll
     if start_entry > end_entry or start_entry < 0:
         start_entry = 0
     for i in range(start_entry, end_entry):

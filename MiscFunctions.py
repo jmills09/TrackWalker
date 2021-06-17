@@ -1,12 +1,24 @@
 import ROOT
 import numpy as np
 
+def make_prediction_vector(PARAMS, np_pred):
+    # Take in a np array np_pred of (nsteps,xdim,ydim) and convert it to a vector
+    # of (nsteps,1dpix predictions)
+    np_preds_vec = np.zeros((np_pred.shape[0]))
+    for ix in range(np_pred.shape[0]):
+        np_flat = np_pred[ix].flatten()
+        np_preds_vec[ix] = np.argmax(np_flat,axis=0)
+    return np_preds_vec
+
 def make_log_stat_dict(namestring=''):
     if namestring != '':
         if namestring[-1] != "_":
             namestring = namestring + "_"
     log_dict = {}
     log_dict[namestring+'loss_average']= 0
+    log_dict[namestring+'loss_stepnet']= 0
+    log_dict[namestring+'loss_endptnet']= 0
+
     log_dict[namestring+'acc_endpoint']= 0
     log_dict[namestring+'num_correct_exact']= 0
     log_dict[namestring+'frac_misIDas_endpoint']= 0
@@ -17,7 +29,11 @@ def make_log_stat_dict(namestring=''):
     log_dict[namestring+'average_distance_off']= 0
     return log_dict
 
-def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, batch_size, is_train=True, is_epoch=True):
+def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
+            loss_total, loss_endptnet, loss_stepnet,
+            batch_size, endpt_pred, endpt_targ,
+            is_train=True, is_epoch=True):
+
     input_image_dimension = PARAMS['PADDING']*2+1
     num_correct_endpoint = 0
     num_mislabeledas_endpoint = 0
@@ -36,33 +52,35 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, batc
         prestring = prestring + "val_"
 
     dists = []
-    for ix in range(np_pred.shape[0]-1):
-        if np_pred[ix] == PARAMS['TRACKEND_CLASS']:
-            num_mislabeledas_endpoint += 1
-            continue
-        this_dist = get_pred_targ_dist(np_pred[ix],np_targ[ix], input_image_dimension)
+    np_pred_flat_idx_vec = make_prediction_vector(PARAMS, np_pred)
+    for ix in range(np_pred_flat_idx_vec.shape[0]):
+        this_dist = get_pred_targ_dist(np_pred_flat_idx_vec[ix],np_targ[ix], input_image_dimension)
         dists.append(this_dist)
-        if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-            if ix != np_pred.shape[0]-1:
-                if np_pred[ix] == np_targ[ix]:
-                    num_correct_exact = num_correct_exact + 1
-                if this_dist <= 2.0:
-                    num_correct_2dist += 1
-                if this_dist <= 5.0:
-                    num_correct_5dist += 1
-                if this_dist <= 10.0:
-                    num_correct_10dist += 1
-        else:
-            if np.array_equal(np_pred[ix], np_targ[ix]):
-                num_correct_exact += 1
-    # HANDLE CASE FOR last ix (Track End)
-    if np_pred[np_pred.shape[0]-1] == np_targ[np_pred.shape[0]-1]:
-        num_correct_endpoint += 1
+        if ix != np_pred_flat_idx_vec.shape[0]-1:
+            if np_pred_flat_idx_vec[ix] == np_targ[ix]:
+                num_correct_exact = num_correct_exact + 1
+            if this_dist <= 2.0:
+                num_correct_2dist += 1
+            if this_dist <= 5.0:
+                num_correct_5dist += 1
+            if this_dist <= 10.0:
+                num_correct_10dist += 1
+
+    # Calc Endpoint Network Metrics, Is last Pt Correct? How many steps get called end?
+    for ix in range(endpt_pred.shape[0]):
+        if endpt_pred[ix] == 1 and endpt_targ[ix] == 1:
+            num_correct_endpoint += 1
+        elif endpt_pred[ix] == 1 and endpt_targ[ix] != 1:
+            num_mislabeledas_endpoint += 1
+
 
     log_stats_dict[prestring+'loss_average'] += loss_total.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'loss_endptnet'] += loss_endptnet.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'loss_stepnet'] += loss_stepnet.cpu().detach().numpy()/batch_size
+
     log_stats_dict[prestring+'acc_endpoint'] += float(num_correct_endpoint)/batch_size
     log_stats_dict[prestring+'num_correct_exact'] += float(num_correct_exact)/batch_size
-    log_stats_dict[prestring+'frac_misIDas_endpoint'] += num_mislabeledas_endpoint/float(np_pred.shape[0]-1)/batch_size
+    log_stats_dict[prestring+'frac_misIDas_endpoint'] += num_mislabeledas_endpoint/float(endpt_pred.shape[0]-1)/batch_size
 
     if len(dists) != 0:
         log_stats_dict[prestring+'acc_exact'] += float(num_correct_exact)/float(len(dists))/batch_size
@@ -71,6 +89,11 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, batc
         log_stats_dict[prestring+'acc_10dist'] += float(num_correct_10dist)/float(len(dists))/batch_size
         log_stats_dict[prestring+'average_distance_off'] += np.mean(dists)/batch_size
     return log_stats_dict
+
+
+
+
+
 
 
 def get_loss_weights_v2(targets, np_pred, PARAMS):
@@ -94,15 +117,9 @@ def get_loss_weights_v2(targets, np_pred, PARAMS):
             loss_weights[idx] = misID_mid_as_end_weight
     return loss_weights
 
-def get_pred_targ_dist(pred, targ, dim, bad_endstep_dist = 3):
+def get_pred_targ_dist(pred, targ, dim):
     if targ == pred:
         return 0
-    elif targ == dim*dim:
-        # Target was track end and prediction didn't match
-        return bad_endstep_dist
-    elif pred == dim*dim:
-        # Prediction was track end and target didn't match
-        return bad_endstep_dist
     else:
         targ_x, targ_y = unflatten_pos(targ, dim)
         pred_x, pred_y = unflatten_pos(pred, dim)
@@ -213,16 +230,108 @@ def reravel_array(np_arr,x_dim,y_dim):
 def flatten_pos(x,y,square_dim):
     new_pos = x*square_dim+y
     return new_pos
+
 def unflatten_pos(pos,square_dim):
     x = int(pos/square_dim)
     y = pos%square_dim
     return x,y
+
 def cropped_np(np_arr,x_center,y_center,padding):
-    pad_arr = np.pad(np_arr,padding)
+    if len(np_arr.shape) == 2:
+        pad_widths = padding
+    else:
+        pad_widths = [(padding,padding) for p in range(len(np_arr.shape)-1)]
+        pad_widths.append((0,0))
+    pad_arr = np.pad(np_arr,pad_widths)
     x_st = x_center
     x_end = x_center+padding+padding+1
     y_st = y_center
     y_end = y_center+padding+padding+1
     new_arr = pad_arr[int(x_st):int(x_end),int(y_st):int(y_end)]
-
     return new_arr
+
+def paste_target(np_arr,x_targ,y_targ,buffer):
+    low_x = int(x_targ-buffer)
+    low_y = int(y_targ-buffer)
+    high_x = int(x_targ+buffer+1)
+    high_y = int(y_targ+buffer+1)
+    if low_x < 0:
+        low_x = 0
+    if low_y < 0:
+        low_y = 0
+    if high_x > np_arr.shape[0]:
+        high_x = np_arr.shape[0]
+    if high_y > np_arr.shape[1]:
+        high_y = np_arr.shape[1]
+    np_arr[low_x:high_x,low_y:high_y] = 1
+    return np_arr
+
+def calc_logger_stats_prearea_predict(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, batch_size,
+            is_train=True, is_epoch=True):
+
+    input_image_dimension = PARAMS['PADDING']*2+1
+    num_correct_endpoint = 0
+    num_mislabeledas_endpoint = 0
+    num_correct_exact = 0
+    num_correct_2dist = 0
+    num_correct_5dist = 0
+    num_correct_10dist = 0
+    prestring = ""
+    if is_epoch:
+        prestring = "epoch_"
+    else:
+        prestring = "step_"
+    if is_train:
+        prestring = prestring + "train_"
+    else:
+        prestring = prestring + "val_"
+
+    dists = []
+    np_pred_flat_idx_vec = make_prediction_vector(PARAMS, np_pred)
+    for ix in range(np_pred_flat_idx_vec.shape[0]-1):
+        if np_pred_flat_idx_vec[ix] == PARAMS['TRACKEND_CLASS']:
+            num_mislabeledas_endpoint += 1
+            continue
+        this_dist = get_pred_targ_dist(np_pred_flat_idx_vec[ix],np_targ[ix], input_image_dimension)
+        dists.append(this_dist)
+        if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+            if ix != np_pred_flat_idx_vec.shape[0]-1:
+                if np_pred_flat_idx_vec[ix] == np_targ[ix]:
+                    num_correct_exact = num_correct_exact + 1
+                if this_dist <= 2.0:
+                    num_correct_2dist += 1
+                if this_dist <= 5.0:
+                    num_correct_5dist += 1
+                if this_dist <= 10.0:
+                    num_correct_10dist += 1
+        else:
+            if np.array_equal(np_pred_flat_idx_vec[ix], np_targ[ix]):
+                num_correct_exact += 1
+    # HANDLE CASE FOR last ix (Track End)
+    if np_pred_flat_idx_vec[np_pred_flat_idx_vec.shape[0]-1] == np_targ[np_pred_flat_idx_vec.shape[0]-1]:
+        num_correct_endpoint += 1
+
+    log_stats_dict[prestring+'loss_average'] += loss_total.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'acc_endpoint'] += float(num_correct_endpoint)/batch_size
+    log_stats_dict[prestring+'num_correct_exact'] += float(num_correct_exact)/batch_size
+    log_stats_dict[prestring+'frac_misIDas_endpoint'] += num_mislabeledas_endpoint/float(np_pred_flat_idx_vec.shape[0]-1)/batch_size
+
+    if len(dists) != 0:
+        log_stats_dict[prestring+'acc_exact'] += float(num_correct_exact)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_2dist'] += float(num_correct_2dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_5dist'] += float(num_correct_5dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_10dist'] += float(num_correct_10dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'average_distance_off'] += np.mean(dists)/batch_size
+    assert 1==2
+    # This is an old method, do not use
+    return log_stats_dict
+
+    # Disable
+    def blockPrint():
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+
+    # Restore
+    def enablePrint():
+        sys.stdout = sys.__stdout__
+        sys.stdout = sys.__stderr__

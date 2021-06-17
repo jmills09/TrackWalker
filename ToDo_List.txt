@@ -3,8 +3,10 @@ Create Loss Dynamic During Trainin
 Feed in Convolutional Net Features
 Pulling Train Data and Validation Data dynamically rather than all at once in the beginning
 Accuracy By Particle
-
 Dump Training PARAMS into txt file in the tensorboard folder w/ custom string
+Add Variance to Loss to minimize variance in x and y
+Weighting for Area Prediction? Necessary?
+UPDATE METRICS FOR AREA PREDICTION
 
 Want:
 Size of Accuracy Threshold search area adjustable by hyperparam
@@ -13,6 +15,7 @@ Length of Truth Step
 Make some Event Display Images
 Hyperparam Dict into a global variable
 Feed Network the current length of track as input
+Make forward model pass same regardless of train/val (function)
 
 Done:
 Try L2 Weighting for Loss
@@ -25,3 +28,5 @@ Add 10dist Accuracy Threshold search area
 Move Model to Own File ModelFunctions.py
 Change Hyperparams to a dictionary
 Load and format data function to DataLoader.py
+Add option for network endpoint to be the center of crop, not special class
+Change network loss&weights to be predicting area of pixels

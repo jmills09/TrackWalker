@@ -7,10 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats, make_log_stat_dict, reravel_array
+from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats, make_log_stat_dict, reravel_array, make_prediction_vector
 from DataLoader import get_net_inputs_mc
 from ModelFunctions import LSTMTagger, run_validation_pass
 import random
+import ROOT
 
 def prepare_sequence(seq, to_ix):
     idxs = [to_ix[w] for w in seq]
@@ -24,9 +25,16 @@ def prepare_sequence_steps(seq,long=False):
         return torch.tensor(full_np, dtype=torch.long)
 
 PARAMS = {}
+
+PARAMS['USE_CONV_IM'] = False
+PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
+PARAMS['MASK_WC'] = False
+
 PARAMS['HIDDEN_DIM'] =1024
-PARAMS['PADDING'] =2
+PARAMS['PADDING'] =10
 PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1) # N_Features
+if PARAMS['USE_CONV_IM']:
+    PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*16 # 16 Features per pixel in larmatch
 PARAMS['NUM_CLASSES'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)+1 # Bonus Class is for the end of track class
 PARAMS['TRACKEND_CLASS'] = (PARAMS['PADDING']*2+1)**2
 PARAMS['CENTERPOINT_ISEND'] = True
@@ -43,38 +51,41 @@ PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] =True # True -> Predict Output Pixel to
 PARAMS['NDIMENSIONS'] = 2 #Not configured to have 3 yet.
 PARAMS['LEARNING_RATE'] =0.0001 # 0.01 is good for the classifier mode,
 PARAMS['TRAINING_SIZE'] = -1 # Deprecated
-PARAMS['DO_TENSORLOG'] = False
+PARAMS['DO_TENSORLOG'] = True
 PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME
 PARAMS['SAVE_MODEL'] = False #should the network save the model?
 PARAMS['CHECKPOINT_EVERY_N_EPOCHS'] =10000 # if not saving then this doesn't matter
-PARAMS['EPOCHS'] = 5
+PARAMS['EPOCHS'] = 100
 PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
-PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 1
+PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
-PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 1
-PARAMS['DEVICE'] = 'cuda:3'
-PARAMS['SHUFFLE_DATASET'] = False
-PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
-# PARAMS['AREA_TARGET'] = True   # Change network to be predicting 
+PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
+PARAMS['DEVICE'] = 'cuda:0'
 
-PARAMS['USE_CONV_IM'] = False
-PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
-PARAMS['MASK_WC'] = False
+PARAMS['SHUFFLE_DATASET'] = False
+PARAMS['VAL_IS_TRAIN'] = True # This will set the validation set equal to the training set
+PARAMS['AREA_TARGET'] = True   # Change network to be predicting
+PARAMS['TARGET_BUFFER'] = 2
+
 
 def main():
     print("Let's Get Started.")
     torch.manual_seed(1)
     START_ENTRY = 0
-    END_ENTRY   = 1
-    START_ENTRY_VAL = 0
-    END_ENTRY_VAL   =1
+    END_ENTRY   = 1000
+    START_ENTRY_VAL = 6000
+    END_ENTRY_VAL   = 6000 # val is train right now
     training_data, full_image, steps_x, steps_y, event_ids, rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY)
     print("Number of Training Examples:", len(training_data))
     validation_data, val_full_image, val_steps_x, val_steps_y, val_event_ids, val_rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY_VAL, END_ENTRY_VAL)
     print("Number of Validation Examples:", len(validation_data))
     # This will rip only a few tracks from the loaded train and val sets
     training_data=training_data[0:1]
-    validation_data=validation_data[0:1]
+    # validation_data=validation_data[0:1]
+    nbins = PARAMS['PADDING']*2+1
+    pred_h = ROOT.TH2D("Prediction Steps Heatmap","Prediction Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
+    targ_h = ROOT.TH2D("Target Steps Heatmap","Target Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
+
     if PARAMS['SHUFFLE_DATASET']:
         all_data = training_data + validation_data
         random.shuffle(all_data)
@@ -98,23 +109,31 @@ def main():
     print("Initializing Model")
     print("Length Training   Set:", len(training_data))
     print("Length Validation Set:", len(validation_data))
-
     output_dim = None
-    loss_function = None
-    if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+    loss_function_next_step = None
+    loss_function_endpoint = None
+    if PARAMS['AREA_TARGET']:
+        output_dim = PARAMS['NUM_CLASSES']
+        loss_function_next_step = nn.MSELoss(reduction='none')
+        loss_function_endpoint = nn.NLLLoss(reduction='none')
+    elif PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
         output_dim = PARAMS['NUM_CLASSES'] # nPixels in crop + 1 for 'end of track'
-        loss_function = nn.NLLLoss(reduction='none')
+        loss_function_next_step = nn.NLLLoss(reduction='none')
+        loss_function_endpoint = nn.NLLLoss(reduction='none')
     else:
         output_dim = PARAMS['NDIMENSIONS'] # Shift X, Shift Y
-        loss_function = nn.MSELoss(reduction='sum')
+        loss_function_next_step = nn.MSELoss(reduction='sum')
+        loss_function_endpoint = nn.NLLLoss(reduction='none')
+
 
     model = LSTMTagger(PARAMS['EMBEDDING_DIM'], PARAMS['HIDDEN_DIM'], output_dim).to(torch.device(PARAMS['DEVICE']))
     optimizer = optim.Adam(model.parameters(), lr=PARAMS['LEARNING_RATE'])
+    is_long = PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] and not PARAMS['AREA_TARGET']
 
 
     step_counter = 0
     for epoch in range(PARAMS['EPOCHS']):  # again, normally you would NOT do 300 epochs, it is toy data
-        print("Epoch:",epoch)
+        print("\nEpoch:\n",epoch)
         train_idx = -1
         # To Log Stats every N epoch
         log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
@@ -123,48 +142,66 @@ def main():
         log_stats_dict_step_train = make_log_stat_dict('step_train_')
         log_stats_dict_step_val = make_log_stat_dict('step_val_')
 
-        for step_images, next_steps in training_data:
+        for step_images, targ_next_step_idx, targ_area_next_step in training_data:
             model.train()
             step_counter += 1
             train_idx += 1
             # Remember that Pytorch accumulates gradients.
             # We need to clear them out before each instance
             model.zero_grad()
-
             step_images_in = prepare_sequence_steps(step_images).to(torch.device(PARAMS['DEVICE']))
-            is_long = PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']
-            targets = prepare_sequence_steps(next_steps,long=is_long).to(torch.device(PARAMS['DEVICE']))
-            np_targ = targets.cpu().detach().numpy()
-
+            n_steps = step_images_in.shape[0]
+            np_targ_endpt = np.zeros((n_steps))
+            np_targ_endpt[n_steps-1] = 1
+            endpoint_targ_t = torch.tensor(np_targ_endpt).to(torch.device(PARAMS['DEVICE']),dtype=torch.long)
+            targets_loss  = None
+            targets_onept = prepare_sequence_steps(targ_next_step_idx,long=is_long)
+            if PARAMS['AREA_TARGET']:
+                targets_loss = prepare_sequence_steps(targ_area_next_step,long=is_long).to(torch.device(PARAMS['DEVICE']))
+            else:
+                targets_loss = targets_onept.to(torch.device(PARAMS['DEVICE']))
             # Step 3. Run our forward pass.
+
             next_steps_pred_scores, endpoint_scores = model(step_images_in)
             np_pred = None
-            if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+            np_targ = None
+            np_pred_endpt = None
+            if PARAMS['AREA_TARGET']:
+                npts = next_steps_pred_scores.cpu().detach().numpy().shape[0]
+                np_pred = next_steps_pred_scores.cpu().detach().numpy().reshape(npts,PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1)
+                np_targ = targets_onept.cpu().detach().numpy()
+                np_pred_endpt = np.argmax(endpoint_scores.cpu().detach().numpy(),axis=1)
+            elif PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
                 np_pred = np.argmax(next_steps_pred_scores.cpu().detach().numpy(),axis=1)
+                np_targ = targets_onept.cpu().detach().numpy()
             else:
                 np_pred = np.rint(next_steps_pred_scores.cpu().detach().numpy()) # Rounded to integers
+                np_targ = targets_onept.cpu().detach().numpy()
 
-
-
-            loss_weights = torch.tensor(get_loss_weights_v2(targets.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
-            loss = loss_function(next_steps_pred_scores, targets)
-            loss_weighted = loss*loss_weights
-            loss_total = torch.mean(loss_weighted)
+            # loss_weights = torch.tensor(get_loss_weights_v2(targets_loss.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
+            loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_loss)
+            vals_per_step = loss_next_steps.shape[1]
+            loss_next_steps_per_step = torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))
+            loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*2
+            loss_weighted = loss_next_steps_per_step + loss_endpoint#*loss_weights
+            loss_total = loss_weighted
             loss_total.backward()
             optimizer.step()
-            print("Info:")
-            print(reravel_array(next_steps_pred_scores.cpu().detach().numpy()[0],PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1))
-            print(targets.cpu().detach().numpy()[0])
-            print(loss.cpu().detach().numpy()[0])
-            print(loss_weights.cpu().detach().numpy()[0])
-            print(loss_weighted.cpu().detach().numpy()[0])
-            print()
+            np_idx_v = make_prediction_vector(PARAMS, np_pred)
+            for ixx in range(np_idx_v.shape[0]):
+                pred_x, pred_y = unflatten_pos(np_idx_v[ixx], PARAMS['PADDING']*2+1)
+                pred_h.Fill(pred_x,pred_y)
+            for ixx in range(np_targ.shape[0]):
+                targ_x, targ_y = unflatten_pos(np_targ[ixx], PARAMS['PADDING']*2+1)
+                targ_h.Fill(targ_x,targ_y)
             if PARAMS['DO_TENSORLOG']:
-                calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, len(training_data), is_train=True,is_epoch=True)
+                calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, len(training_data), np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                 if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:
-                    calc_logger_stats(log_stats_dict_step_train, PARAMS, np_pred, np_targ, loss_total, PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'], is_train=True,is_epoch=False)
+                    calc_logger_stats(log_stats_dict_step_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=False)
                 if step_counter%PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']== 0:
-                    writer.add_scalar('Step/train_loss', log_stats_dict_step_train['step_train_loss_average'], step_counter)
+                    writer.add_scalar('Step/train_loss_total', log_stats_dict_step_train['step_train_loss_average'], step_counter)
+                    writer.add_scalar('Step/train_loss_endpointnet', log_stats_dict_step_train['step_train_loss_endptnet'], step_counter)
+                    writer.add_scalar('Step/train_loss_stepnet', log_stats_dict_step_train['step_train_loss_stepnet'], step_counter)
                     writer.add_scalar('Step/train_acc_endpoint', log_stats_dict_step_train['step_train_acc_endpoint'], step_counter)
                     writer.add_scalar('Step/train_acc_exact', log_stats_dict_step_train['step_train_acc_exact'], step_counter)
                     writer.add_scalar('Step/train_acc_2dist', log_stats_dict_step_train['step_train_acc_2dist'], step_counter)
@@ -175,15 +212,16 @@ def main():
                     writer.add_scalar("Step/train_frac_misIDas_endpoint", log_stats_dict_step_train['step_train_frac_misIDas_endpoint'],step_counter)
                     log_stats_dict_step_train = make_log_stat_dict('step_train_')
 
+
                 if PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] !=-1 and step_counter%PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] == 0:
                     log_stats_dict_step_val = make_log_stat_dict('step_val_')
-                    run_validation_pass(PARAMS, model, validation_data, loss_function, writer, log_stats_dict_step_val, step_counter, is_epoch=False)
+                    run_validation_pass(PARAMS, model, validation_data, loss_function_next_step, loss_function_endpoint, writer, log_stats_dict_step_val, step_counter, is_epoch=False)
 
         ####### DO VALIDATION PASS
         if PARAMS['DO_TENSORLOG'] and epoch%PARAMS['VALIDATION_EPOCH_LOGINTERVAL']==0:
             print("Logging Val Epoch", epoch)
             log_stats_dict_epoch_val = make_log_stat_dict('epoch_val_')
-            run_validation_pass(PARAMS, model, validation_data, loss_function, writer, log_stats_dict_epoch_val, epoch, is_epoch=True)
+            run_validation_pass(PARAMS, model, validation_data, loss_function_next_step, loss_function_endpoint, writer, log_stats_dict_epoch_val, epoch, is_epoch=True)
 
 
         # if epoch%50 ==0:

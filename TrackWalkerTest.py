@@ -7,11 +7,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats, make_log_stat_dict, reravel_array, make_prediction_vector
+from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats
+from MiscFunctions import make_log_stat_dict, reravel_array, make_prediction_vector
+from MiscFunctions import blockPrint, enablePrint
 from DataLoader import get_net_inputs_mc
 from ModelFunctions import LSTMTagger, run_validation_pass
 import random
 import ROOT
+
 
 def prepare_sequence(seq, to_ix):
     idxs = [to_ix[w] for w in seq]
@@ -50,7 +53,6 @@ PARAMS['ALWAYS_EDGE'] =True # True points are always placed at the edge of the P
 PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] =True # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
 PARAMS['NDIMENSIONS'] = 2 #Not configured to have 3 yet.
 PARAMS['LEARNING_RATE'] =0.0001 # 0.01 is good for the classifier mode,
-PARAMS['TRAINING_SIZE'] = -1 # Deprecated
 PARAMS['DO_TENSORLOG'] = True
 PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME
 PARAMS['SAVE_MODEL'] = False #should the network save the model?
@@ -60,10 +62,14 @@ PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
 PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
 PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
-PARAMS['DEVICE'] = 'cuda:0'
+PARAMS['DEVICE'] = 'cuda:3'
+
+PARAMS['TRAIN_EPOCH_SIZE'] = 100
+PARAMS['VAL_EPOCH_SIZE'] = int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
+PARAMS['LOAD_SIZE']  = 10
 
 PARAMS['SHUFFLE_DATASET'] = False
-PARAMS['VAL_IS_TRAIN'] = True # This will set the validation set equal to the training set
+PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
 PARAMS['AREA_TARGET'] = True   # Change network to be predicting
 PARAMS['TARGET_BUFFER'] = 2
 
@@ -71,20 +77,22 @@ PARAMS['TARGET_BUFFER'] = 2
 def main():
     print("Let's Get Started.")
     torch.manual_seed(1)
-    START_ENTRY = 0
-    END_ENTRY   = 1000
-    START_ENTRY_VAL = 6000
-    END_ENTRY_VAL   = 6000 # val is train right now
-    training_data, full_image, steps_x, steps_y, event_ids, rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY)
-    print("Number of Training Examples:", len(training_data))
-    validation_data, val_full_image, val_steps_x, val_steps_y, val_event_ids, val_rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY_VAL, END_ENTRY_VAL)
-    print("Number of Validation Examples:", len(validation_data))
-    # This will rip only a few tracks from the loaded train and val sets
-    training_data=training_data[0:1]
-    # validation_data=validation_data[0:1]
     nbins = PARAMS['PADDING']*2+1
     pred_h = ROOT.TH2D("Prediction Steps Heatmap","Prediction Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
     targ_h = ROOT.TH2D("Target Steps Heatmap","Target Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
+
+    START_ENTRY = 0
+    END_ENTRY   = 1000
+    START_ENTRY_VAL = 6000
+    END_ENTRY_VAL   = 6200 # val is train right now
+    training_data, full_image, steps_x, steps_y, event_ids, rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY)
+    # print("Number of Training Examples:", len(training_data))
+    validation_data, val_full_image, val_steps_x, val_steps_y, val_event_ids, val_rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY_VAL, END_ENTRY_VAL)
+    print("Number of Validation Examples:", len(validation_data))
+    # This will rip only a few tracks from the loaded train and val sets
+    # training_data=training_data[0:1]
+    # validation_data=validation_data[0:1]
+
 
     if PARAMS['SHUFFLE_DATASET']:
         all_data = training_data + validation_data
@@ -107,8 +115,8 @@ def main():
     print("/////////////////////////////////////////////////")
     print("/////////////////////////////////////////////////")
     print("Initializing Model")
-    print("Length Training   Set:", len(training_data))
-    print("Length Validation Set:", len(validation_data))
+    # print("Length Training   Set:", len(training_data))
+    # print("Length Validation Set:", len(validation_data))
     output_dim = None
     loss_function_next_step = None
     loss_function_endpoint = None
@@ -133,7 +141,7 @@ def main():
 
     step_counter = 0
     for epoch in range(PARAMS['EPOCHS']):  # again, normally you would NOT do 300 epochs, it is toy data
-        print("\nEpoch:\n",epoch)
+        print("\n-----------------------------------\nEpoch:",epoch,"\n")
         train_idx = -1
         # To Log Stats every N epoch
         log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
@@ -141,7 +149,17 @@ def main():
         # To Log Stats Every N Tracks Looked At
         log_stats_dict_step_train = make_log_stat_dict('step_train_')
         log_stats_dict_step_val = make_log_stat_dict('step_val_')
-
+        number_train_loaded_so_far = 0
+        START_ENTRY = 0
+        END_ENTRY   = PARAMS['LOAD_SIZE']
+        # while number_train_loaded_so_far < PARAMS['TRAIN_EPOCH_SIZE']:
+        #     training_data, full_image, steps_x, steps_y, event_ids, rse_pdg_dict =  get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY, PARAMS['TRAIN_EPOCH_SIZE']-number_train_loaded_so_far)
+        #     number_train_loaded_so_far += len(training_data)
+        #     START_ENTRY = END_ENTRY
+        #     END_ENTRY = START_ENTRY+PARAMS['LOAD_SIZE']
+        #     print('Loaded From Events',START_ENTRY, 'to', END_ENTRY)
+        #     print(len(training_data), "Tracks from this eventlist")
+        #     print(number_train_loaded_so_far, "Tracks loaded total this epoch.")
         for step_images, targ_next_step_idx, targ_area_next_step in training_data:
             model.train()
             step_counter += 1
@@ -195,10 +213,11 @@ def main():
                 targ_x, targ_y = unflatten_pos(np_targ[ixx], PARAMS['PADDING']*2+1)
                 targ_h.Fill(targ_x,targ_y)
             if PARAMS['DO_TENSORLOG']:
-                calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, len(training_data), np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
+                calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['LOAD_SIZE'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                 if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:
                     calc_logger_stats(log_stats_dict_step_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=False)
                 if step_counter%PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']== 0:
+                    print("Logging Train Step",step_counter)
                     writer.add_scalar('Step/train_loss_total', log_stats_dict_step_train['step_train_loss_average'], step_counter)
                     writer.add_scalar('Step/train_loss_endpointnet', log_stats_dict_step_train['step_train_loss_endptnet'], step_counter)
                     writer.add_scalar('Step/train_loss_stepnet', log_stats_dict_step_train['step_train_loss_stepnet'], step_counter)
@@ -214,8 +233,10 @@ def main():
 
 
                 if PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] !=-1 and step_counter%PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] == 0:
+                    print("Logging Val Step",step_counter)
                     log_stats_dict_step_val = make_log_stat_dict('step_val_')
                     run_validation_pass(PARAMS, model, validation_data, loss_function_next_step, loss_function_endpoint, writer, log_stats_dict_step_val, step_counter, is_epoch=False)
+
 
         ####### DO VALIDATION PASS
         if PARAMS['DO_TENSORLOG'] and epoch%PARAMS['VALIDATION_EPOCH_LOGINTERVAL']==0:
@@ -246,7 +267,9 @@ def main():
         #     print()
         if PARAMS['DO_TENSORLOG'] and epoch%PARAMS['TRAIN_EPOCH_LOGINTERVAL']==0:
             print("Logging Train Epoch", epoch)
-            writer.add_scalar('Epoch/train_loss', log_stats_dict_epoch_train['epoch_train_loss_average'], epoch)
+            writer.add_scalar('Epoch/train_loss_total', log_stats_dict_epoch_train['epoch_train_loss_average'], epoch)
+            writer.add_scalar('Epoch/train_loss_endpointnet', log_stats_dict_epoch_train['epoch_train_loss_endptnet'], epoch)
+            writer.add_scalar('Epoch/train_loss_stepnet', log_stats_dict_epoch_train['epoch_train_loss_stepnet'], epoch)
             writer.add_scalar('Epoch/train_acc_endpoint', log_stats_dict_epoch_train['epoch_train_acc_endpoint'], epoch)
             writer.add_scalar('Epoch/train_acc_exact', log_stats_dict_epoch_train['epoch_train_acc_exact'], epoch)
             writer.add_scalar('Epoch/train_acc_2dist', log_stats_dict_epoch_train['epoch_train_acc_2dist'], epoch)

@@ -1,5 +1,6 @@
 import ROOT
 import numpy as np
+import os, sys
 
 def make_prediction_vector(PARAMS, np_pred):
     # Take in a np array np_pred of (nsteps,xdim,ydim) and convert it to a vector
@@ -326,12 +327,12 @@ def calc_logger_stats_prearea_predict(log_stats_dict, PARAMS, np_pred, np_targ, 
     # This is an old method, do not use
     return log_stats_dict
 
-    # Disable
-    def blockPrint():
-        sys.stdout = open(os.devnull, 'w')
-        sys.stderr = open(os.devnull, 'w')
+# Disable
+def blockPrint():
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
 
-    # Restore
-    def enablePrint():
-        sys.stdout = sys.__stdout__
-        sys.stdout = sys.__stderr__
+# Restore
+def enablePrint():
+    sys.stdout = sys.__stdout__
+    sys.stdout = sys.__stderr__

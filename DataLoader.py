@@ -8,107 +8,124 @@ from ublarcvapp import ublarcvapp
 from MiscFunctions import cropped_np, unravel_array, reravel_array, paste_target
 from LArMatchModel import LArMatchConvNet
 
-def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY):
+
+
+def get_net_inputs_mc(PARAMS, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1):
     # This function takes a root file path, a start entry and an end entry
     # and returns the mc track information in a form the network is
     # prepared to take as input
     print("Loading Network Inputs")
-    steps_x = []
-    steps_y = []
-    full_images = []
-    training_data = []
-    event_ids = []
     step_dist_3d = []
     image_list, xs, ys, runs, subruns, events, filepaths, entries, track_pdgs = load_rootfile_training(PARAMS, step_dist_3d, START_ENTRY, END_ENTRY)
-    print()
-    # save_im(image_list[EVENT_IDX],"images/EventDisp")
-    for EVENT_IDX in range(len(image_list)):
-        print("Doing Event:", EVENT_IDX)
-        print("N MC Tracks:", len(xs[EVENT_IDX]))
-        for TRACK_IDX in range(len(xs[EVENT_IDX])):
-            # if TRACK_IDX != 0:
-            #     continue
-            print("     Doing Track:", TRACK_IDX)
-            full_image = image_list[EVENT_IDX]
-            steps_x = xs[EVENT_IDX][TRACK_IDX]
-            steps_y = ys[EVENT_IDX][TRACK_IDX]
 
+    training_data = []
+    for x in range(1):
+        print('\n\n\n')
+        # This is just a loop to see if this is blowing up memory (it will if you loop)
+        print(x)
+        print('\n\n\n')
+        full_images = []
+        event_ids = []
 
-            print("         Original Track Points", len(steps_x))
-            new_steps_x, new_steps_y = insert_cropedge_steps(steps_x,steps_y,PARAMS['PADDING'],always_edge=PARAMS['ALWAYS_EDGE'])
-            steps_x = new_steps_x
-            steps_y = new_steps_y
-
-            print("         After Inserted Track Points", len(steps_x))
-            if len(steps_x) < 2: #Don't  include tracks without a step and then endpoint
-                continue
-
-            # Many of the following categories are just a reformatting of each other
-            # They are duplicated to allow for easy network mode switching
-            stepped_images = [] # List of cropped images as 2D numpy array
-            flat_stepped_images = [] # list of cropped images as flattened 1D np array
-            next_positions = [] # list of next step positions as np(x,y)
-            flat_next_positions = [] # list of next step positions in flattened single coord idx
-            flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
-            xy_shifts = [] # list of X,Y shifts to take the next step
-            for idx in range(len(steps_x)):
-                # if idx > 1:
+        steps_x = []
+        steps_y = []
+        print()
+        # save_im(image_list[EVENT_IDX],"images/EventDisp")
+        for EVENT_IDX in range(len(image_list)):
+            print("Doing Event:", EVENT_IDX)
+            print("N MC Tracks:", len(xs[EVENT_IDX]))
+            for TRACK_IDX in range(len(xs[EVENT_IDX])):
+                # if TRACK_IDX != 0:
                 #     continue
-                step_x = steps_x[idx]
-                step_y = steps_y[idx]
-                next_step_x = -1.0
-                next_step_y = -1.0
-                if idx != len(steps_x)-1:
-                    next_step_x = steps_x[idx+1]
-                    next_step_y = steps_y[idx+1]
-                cropped_step_image = cropped_np(full_image, step_x, step_y, PARAMS['PADDING'])
-                required_padding_x = PARAMS['PADDING'] - step_x
-                required_padding_y = PARAMS['PADDING'] - step_y
-                stepped_images.append(cropped_step_image)
-                flat_stepped_images.append(unravel_array(cropped_step_image))
-                if idx != len(steps_x)-1:
-                    target_x = required_padding_x + next_step_x
-                    target_y = required_padding_y + next_step_y
-                    np_step_target = np.array([target_x*1.0,target_y*1.0])
-                    flat_np_step_target = target_x*cropped_step_image.shape[1]+target_y
-                    if PARAMS['AREA_TARGET']:
-                        zeros_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
-                        flat_area_positions.append(unravel_array(paste_target(zeros_np,target_x,target_y,PARAMS['TARGET_BUFFER'])))
-                    next_positions.append(np_step_target)
-                    flat_next_positions.append(flat_np_step_target)
-                    np_xy_shift = np.array([target_x*1.0-PARAMS['PADDING'],target_y*1.0-PARAMS['PADDING'] ])
-                    xy_shifts.append(np_xy_shift)
-                else:
-                    if PARAMS['AREA_TARGET']:
-                        next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
-                        flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
-                        targ_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
-                        flat_area_positions.append(unravel_array(paste_target(targ_np,PARAMS['PADDING'],PARAMS['PADDING'],PARAMS['TARGET_BUFFER']))) #should correspond to centerpoint
-                        np_xy_shift = np.array([0.0,0.0])
-                        xy_shifts.append(np_xy_shift)
-                    elif PARAMS['CENTERPOINT_ISEND']:
-                        next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
-                        flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
-                        np_xy_shift = np.array([0.0,0.0])
+                print("     Doing Track:", TRACK_IDX)
+                full_image = image_list[EVENT_IDX]
+                steps_x = xs[EVENT_IDX][TRACK_IDX]
+                steps_y = ys[EVENT_IDX][TRACK_IDX]
+
+
+                print("         Original Track Points", len(steps_x))
+                new_steps_x, new_steps_y = insert_cropedge_steps(steps_x,steps_y,PARAMS['PADDING'],always_edge=PARAMS['ALWAYS_EDGE'])
+                steps_x = new_steps_x
+                steps_y = new_steps_y
+
+                print("         After Inserted Track Points", len(steps_x))
+                if len(steps_x) < 2: #Don't  include tracks without a step and then endpoint
+                    continue
+
+                # Many of the following categories are just a reformatting of each other
+                # They are duplicated to allow for easy network mode switching
+                stepped_images = [] # List of cropped images as 2D numpy array
+                flat_stepped_images = [] # list of cropped images as flattened 1D np array
+                next_positions = [] # list of next step positions as np(x,y)
+                flat_next_positions = [] # list of next step positions in flattened single coord idx
+                flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
+                xy_shifts = [] # list of X,Y shifts to take the next step
+                for idx in range(len(steps_x)):
+                    # if idx > 1:
+                    #     continue
+                    step_x = steps_x[idx]
+                    step_y = steps_y[idx]
+                    next_step_x = -1.0
+                    next_step_y = -1.0
+                    if idx != len(steps_x)-1:
+                        next_step_x = steps_x[idx+1]
+                        next_step_y = steps_y[idx+1]
+                    cropped_step_image = cropped_np(full_image, step_x, step_y, PARAMS['PADDING'])
+                    required_padding_x = PARAMS['PADDING'] - step_x
+                    required_padding_y = PARAMS['PADDING'] - step_y
+
+                    stepped_images.append(cropped_step_image)
+                    flat_stepped_images.append(unravel_array(cropped_step_image))
+
+                    if idx != len(steps_x)-1:
+                        target_x = required_padding_x + next_step_x
+                        target_y = required_padding_y + next_step_y
+                        np_step_target = np.array([target_x*1.0,target_y*1.0])
+                        flat_np_step_target = target_x*cropped_step_image.shape[1]+target_y
+                        if PARAMS['AREA_TARGET']:
+                            zeros_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
+                            flat_area_positions.append(unravel_array(paste_target(zeros_np,target_x,target_y,PARAMS['TARGET_BUFFER'])))
+                        next_positions.append(np_step_target)
+                        flat_next_positions.append(flat_np_step_target)
+                        np_xy_shift = np.array([target_x*1.0-PARAMS['PADDING'],target_y*1.0-PARAMS['PADDING'] ])
                         xy_shifts.append(np_xy_shift)
                     else:
-                        next_positions.append(np.array([-1.0,-1.0]))
-                        flat_next_positions.append(PARAMS['NUM_CLASSES']-1)
-                        np_xy_shift = np.array([0.0,0.0])
-                        xy_shifts.append(np_xy_shift)
-            if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-                training_data.append((stepped_images,flat_next_positions,flat_area_positions))
-                event_ids.append(EVENT_IDX)
-            else:
-                training_data.append((stepped_images,xy_shifts))
-                event_ids.append(EVENT_IDX)
-    rse_pdg_dict = {}
-    rse_pdg_dict['runs'] = runs
-    rse_pdg_dict['subruns'] = subruns
-    rse_pdg_dict['events'] = events
-    rse_pdg_dict['filepaths'] = filepaths
-    rse_pdg_dict['pdgs'] = track_pdgs
-    rse_pdg_dict['file_idx'] = entries
+                        if PARAMS['AREA_TARGET']:
+                            next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
+                            flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
+                            targ_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
+                            flat_area_positions.append(unravel_array(paste_target(targ_np,PARAMS['PADDING'],PARAMS['PADDING'],PARAMS['TARGET_BUFFER']))) #should correspond to centerpoint
+                            np_xy_shift = np.array([0.0,0.0])
+                            xy_shifts.append(np_xy_shift)
+                        elif PARAMS['CENTERPOINT_ISEND']:
+                            next_positions.append(np.array([PARAMS['PADDING'],PARAMS['PADDING']])) #should correspond to centerpoint
+                            flat_next_positions.append((PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
+                            np_xy_shift = np.array([0.0,0.0])
+                            xy_shifts.append(np_xy_shift)
+                        else:
+                            next_positions.append(np.array([-1.0,-1.0]))
+                            flat_next_positions.append(PARAMS['NUM_CLASSES']-1)
+                            np_xy_shift = np.array([0.0,0.0])
+                            xy_shifts.append(np_xy_shift)
+                if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+                    training_data.append((stepped_images,flat_next_positions,flat_area_positions))
+                    event_ids.append(EVENT_IDX)
+                    if len(training_data) == MAX_TRACKS_PULL:
+                        print("Clipping Training Load Size at ",len(training_data))
+                        break
+                else:
+                    training_data.append((stepped_images,xy_shifts))
+                    event_ids.append(EVENT_IDX)
+                    if len(training_data) == MAX_TRACKS_PULL:
+                        print("Clipping Training Load Size at ",len(training_data))
+                        break
+        rse_pdg_dict = {}
+        rse_pdg_dict['runs'] = runs
+        rse_pdg_dict['subruns'] = subruns
+        rse_pdg_dict['events'] = events
+        rse_pdg_dict['filepaths'] = filepaths
+        rse_pdg_dict['pdgs'] = track_pdgs
+        rse_pdg_dict['file_idx'] = entries
     return training_data, full_images, steps_x, steps_y, event_ids, rse_pdg_dict
 
 def is_inside_boundaries(xt,yt,zt,buffer = 0):
@@ -276,7 +293,7 @@ def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1
             subrun = ev_wire.subrun()
             event = ev_wire.event()
             meta = y_wire_image2d.meta()
-        full_image_list.append(y_wire_np)
+        full_image_list.append(np.copy(y_wire_np))
         runs.append(run)
         subruns.append(subrun)
         events.append(event)
@@ -291,7 +308,7 @@ def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1
         print("N Tracks", len(ev_mctrack))
         for mctrack in ev_mctrack:
             trk_idx += 1
-            if mctrack.PdgCode() in PDG_to_Part and PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON"]:
+            if mctrack.PdgCode() not in PDG_to_Part or PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON"]:
                 continue
             print("Track Index:",trk_idx)
             if mctrack.PdgCode()  in PDG_to_Part:
@@ -338,6 +355,8 @@ def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1
         ev_trk_xpt_list.append(trk_xpt_list)
         ev_trk_ypt_list.append(trk_ypt_list)
         track_pdgs.append(this_event_track_pdgs)
+    ioll.close()
+    iocv.finalize()
     return full_image_list, ev_trk_xpt_list, ev_trk_ypt_list, runs, subruns, events, filepaths, entries, track_pdgs
 
 def load_rootfile_deploy(filename, start_entry = 0, end_entry = -1, seed_MC=False):

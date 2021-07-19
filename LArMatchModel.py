@@ -141,8 +141,6 @@ class LArMatchConvNet:
             outfeat_y = self.model.forward_features_oneplane( coord_t[0], feat_t[0],
                                                            1, verbose=False )
 
-        print("\n\n\n\nLArMatch Done\n")
-        print(time.time() - t_start_larmatch, "Seconds for LArMatch\n\n\n\n")
         # Take output tensor and make it a dense numpy array
         detach_outfeat_y = outfeat_y.cpu().detach().numpy()
         detach_outfeat_y = np.reshape(detach_outfeat_y,(outfeat_y.shape[1],outfeat_y.shape[2],outfeat_y.shape[3]))
@@ -150,4 +148,6 @@ class LArMatchConvNet:
         #slice away the padded extra pixels larmatchnet uses
         detach_outfeat_y_transposed = detach_outfeat_y_transposed[:,0:1008,:]
 
+        print("\n\n\n\nLArMatch Done\n")
+        print(time.time() - t_start_larmatch, "Seconds for LArMatch\n\n\n\n")
         return detach_outfeat_y_transposed, ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()

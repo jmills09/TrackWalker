@@ -33,7 +33,7 @@ def make_log_stat_dict(namestring=''):
 def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
             loss_total, loss_endptnet, loss_stepnet,
             batch_size, endpt_pred, endpt_targ,
-            is_train=True, is_epoch=True):
+            is_train=True, is_epoch=True,no_prestring=False):
 
     input_image_dimension = PARAMS['PADDING']*2+1
     num_correct_endpoint = 0
@@ -47,10 +47,11 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
         prestring = "epoch_"
     else:
         prestring = "step_"
-    if is_train:
-        prestring = prestring + "train_"
-    else:
-        prestring = prestring + "val_"
+    if not PARAMS['TWOWRITERS']:
+        if is_train:
+            prestring = prestring + "train_"
+        else:
+            prestring = prestring + "val_"
 
     dists = []
     np_pred_flat_idx_vec = make_prediction_vector(PARAMS, np_pred)
@@ -188,17 +189,22 @@ def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None):
     # for im_ix in range(2):
         y = np_images[im_ix]
         y = reravel_array(y,dim,dim)
-        pred_next_pos = pred[im_ix]
-        pred_next_x, pred_next_y = unflatten_pos(pred_next_pos,dim)
-
-        true_next_pos = targ[im_ix]
-        true_next_x, true_next_y = unflatten_pos(true_next_pos,dim)
-        if pred_next_pos == dim**2: # if predicted track end
-            pred_next_x = y.shape[0]/2
-            pred_next_y = y.shape[1]/2
-        if true_next_pos == dim**2: #If true track end
-            true_next_x = y.shape[0]/2-0.5
-            true_next_y = y.shape[1]/2-0.5
+        pred_next_x = None
+        pred_next_y = None
+        true_next_x = None
+        true_next_y = None
+        if pred != None:
+            pred_next_pos = pred[im_ix]
+            pred_next_x, pred_next_y = unflatten_pos(pred_next_pos,dim)
+            if pred_next_pos == dim**2: # if predicted track end
+                pred_next_x = y.shape[0]/2
+                pred_next_y = y.shape[1]/2
+        if targ != None:
+            true_next_pos = targ[im_ix]
+            true_next_x, true_next_y = unflatten_pos(true_next_pos,dim)
+            if true_next_pos == dim**2: #If true track end
+                true_next_x = y.shape[0]/2-0.5
+                true_next_y = y.shape[1]/2-0.5
         save_im(y,string_pattern+str(im_ix).zfill(3),pred_next_x,pred_next_y,true_next_x,true_next_y)
     return 0
     # save_im(cropped_step_image,'step'+str(idx))
@@ -238,17 +244,49 @@ def unflatten_pos(pos,square_dim):
     return x,y
 
 def cropped_np(np_arr,x_center,y_center,padding):
+    # if len(np_arr.shape) == 2:
+    #     pad_widths = padding
+    # else:
+    #     pad_widths = [(padding,padding) for p in range(len(np_arr.shape)-1)]
+    #     pad_widths.append((0,0))
+    # # print("Shape Pre Pad:",np_arr.shape)
+    # pad_arr = np.pad(np_arr,pad_widths)
+    # x_st = x_center
+    # x_end = x_center+padding+padding+1
+    # y_st = y_center
+    # y_end = y_center+padding+padding+1
+    # new_arr = pad_arr[int(x_st):int(x_end),int(y_st):int(y_end)]
+    new_arr = None
     if len(np_arr.shape) == 2:
-        pad_widths = padding
+        new_arr = np.zeros((padding*2+1,padding*2+1))
     else:
-        pad_widths = [(padding,padding) for p in range(len(np_arr.shape)-1)]
-        pad_widths.append((0,0))
-    pad_arr = np.pad(np_arr,pad_widths)
-    x_st = x_center
-    x_end = x_center+padding+padding+1
-    y_st = y_center
-    y_end = y_center+padding+padding+1
-    new_arr = pad_arr[int(x_st):int(x_end),int(y_st):int(y_end)]
+        new_arr = np.zeros((padding*2+1,padding*2+1,16))
+    x_st  = x_center - padding
+    x_end = x_center + padding + 1
+    y_st  = y_center - padding
+    y_end = y_center + padding + 1
+    x_st_new  = 0
+    x_end_new = padding*2+1
+    y_st_new  = 0
+    y_end_new = padding*2+1
+    if x_st >= np_arr.shape[0] or y_st >= np_arr.shape[1]:
+        return new_arr
+    elif x_end < 0 or y_end < 0:
+        return new_arr
+    if x_st < 0:
+        x_st_new = 0 - x_st
+        x_st = 0
+    if y_st < 0:
+        y_st_new = 0 - y_st
+        y_st = 0
+    if x_end >= np_arr.shape[0]:
+        x_end_new = padding*2+1 - (x_end - np_arr.shape[0])
+        x_end = np_arr.shape[0]
+    if y_end >= np_arr.shape[1]:
+        y_end_new = padding*2+1 - (y_end - np_arr.shape[1])
+        y_end = np_arr.shape[1]
+
+    new_arr[int(x_st_new):int(x_end_new),int(y_st_new):int(y_end_new)] = np_arr[int(x_st):int(x_end),int(y_st):int(y_end)]
     return new_arr
 
 def paste_target(np_arr,x_targ,y_targ,buffer):

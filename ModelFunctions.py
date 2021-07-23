@@ -12,7 +12,7 @@ class LSTMTagger(nn.Module):
     def __init__(self, embedding_dim, hidden_dim, output_dim):
         super(LSTMTagger, self).__init__()
         self.hidden_dim = hidden_dim
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers = 2, batch_first=False)
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=False)
         self.hidden2tag = nn.Linear(hidden_dim, output_dim)
         self.hidden2endpoint = nn.Linear(hidden_dim, 2) # head to classify step as endpoint
 
@@ -32,6 +32,7 @@ class LSTMTagger(nn.Module):
         tag_scores = (1+torch.tanh(tag_space))/2
         endpoint_space = self.hidden2endpoint(lstm_out.view(sequence.shape[0],-1))
         endpoint_scores = F.log_softmax(endpoint_space, dim=1)
+        # print("      Reg Softmax",F.softmax(endpoint_space, dim=1).detach().cpu().numpy())
         return tag_scores, endpoint_scores, hidden_n.detach(), cell_n.detach()
 
 
@@ -77,11 +78,9 @@ def prepare_sequence_steps(seq,long=False):
     else:
         return torch.tensor(full_np, dtype=torch.long)
 
-# def run_validation_pass(PARAMS, model, validation_data, loss_function_next_step, loss_function_endpoint, writer, log_stats_dict, log_idx, is_epoch=True):
 def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, loss_function_endpoint, writer, log_stats_dict, log_idx, is_epoch=True):
     with torch.no_grad():
         model.eval()
-
         start_entry = reformatloader.current_val_entry
         end_entry   = reformatloader.current_val_entry + PARAMS['VAL_SAMPLE_SIZE']
         if end_entry > reformatloader.nentries_val:
@@ -123,13 +122,11 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
                 else:
                     np_pred = np.rint(next_steps_pred_scores.cpu().detach().numpy()) # Rounded to integers
                     np_targ = targets_onept.cpu().detach().numpy()
-                # loss_weights = torch.tensor(get_loss_weights_v2(targets.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
                 loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_loss)
                 vals_per_step = loss_next_steps.shape[1]
-                loss_next_steps_per_step = torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))
-                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))
-                loss_weighted = loss_next_steps_per_step + loss_endpoint#*loss_weights
-                loss_total = loss_weighted
+                loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
+                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
+                loss_total = loss_next_steps_per_step + loss_endpoint
                 calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['VAL_SAMPLE_SIZE'], np_pred_endpt, np_targ_endpt, is_train=False, is_epoch=is_epoch)
         prestring = "step_"
         folder = "Step/"
@@ -148,6 +145,7 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             writer.add_scalar(folder+'validation_num_correct_exact', log_stats_dict[prestring+'val_num_correct_exact'], log_idx)
             writer.add_scalar(folder+"validation_average_off_distance", log_stats_dict[prestring+'val_average_distance_off'],log_idx)
             writer.add_scalar(folder+"validation_frac_misIDas_endpoint", log_stats_dict[prestring+'val_frac_misIDas_endpoint'],log_idx)
+            writer.add_scalar(folder+"validation_lr", PARAMS['CURRENT_LR'],log_idx)
         else:
             writer.add_scalar(folder+'loss_total', log_stats_dict[prestring+'loss_average'], log_idx)
             writer.add_scalar(folder+'loss_endpointnet', log_stats_dict[prestring+'loss_endptnet'], log_idx)
@@ -160,3 +158,4 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             writer.add_scalar(folder+'num_correct_exact', log_stats_dict[prestring+'num_correct_exact'], log_idx)
             writer.add_scalar(folder+"average_off_distance", log_stats_dict[prestring+'average_distance_off'],log_idx)
             writer.add_scalar(folder+"frac_misIDas_endpoint", log_stats_dict[prestring+'frac_misIDas_endpoint'],log_idx)
+            writer.add_scalar(folder+"lr", PARAMS['CURRENT_LR'],log_idx)

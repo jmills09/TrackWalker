@@ -1,6 +1,66 @@
 import ROOT
 import numpy as np
 import os, sys
+import signal
+import socket
+from datetime import datetime
+from tensorboardX import SummaryWriter
+
+def get_writers(PARAMS):
+    if PARAMS['TENSORDIR'] == None:
+        current_time = datetime.now().strftime('%b%d_%H-%M-%S')
+        top_log_dir = os.path.join(
+            'runs', current_time + '_' + socket.gethostname())
+        sub_log_dir = socket.gethostname()
+        print("DIRNAME:", top_log_dir+"/"+sub_log_dir)
+        # if not os.path.exists(top_log_dir):
+        #     os.mkdir(top_log_dir)
+        writer_train = SummaryWriter(top_log_dir+"/"+sub_log_dir+"_train")
+        writer_val   = SummaryWriter(top_log_dir+"/"+sub_log_dir+"_val")
+        if not PARAMS['TWOWRITERS']:
+            writer_val = writer_train
+        with open(top_log_dir+"/"+'PARAMS_LOG.txt', 'w') as logfile:
+            logfile.write("Ran with PARAMS:\n")
+            logfile.write("------------------------------------------------\n\n")
+            # set alarm
+            wait_time=30
+            signal.signal(signal.SIGALRM, interrupted)
+            signal.alarm(wait_time)
+            s = get_user_input(wait_time)
+            # disable the alarm after success
+            signal.alarm(0)
+            logfile.write(s)
+            for k,v in PARAMS.items():
+                line = "PARAMS['"+k+"'] = "+str(v)+"\n"
+                logfile.write(line)
+            logfile.write('\n\n')
+
+            logfile.close()
+    else:
+        print("Deprecated to force tensordir")
+        assert 1==2
+        writer_train = SummaryWriter(top_log_dir=PARAMS['TENSORDIR'])
+    return writer_train, writer_val
+
+def interrupted(signum, frame):
+    # "called when read times out"
+    print('Alright times up, lets do this, LEEROY JENKINS!')
+    assert 1==2 # Need some way to throw an error, this better work.
+
+
+def get_user_input(wait_time=30):
+    try:
+            print('\n--------------------------------------------\n')
+            print('You have '+str(wait_time)+' seconds. Type in any special reasons')
+            print('for your run now, press enter when finished:\n')
+
+            foo = input()
+            return str(foo)+'\n\n'
+    except:
+            # timeout
+            return '\n\n'
+
+
 
 def make_prediction_vector(PARAMS, np_pred):
     # Take in a np array np_pred of (nsteps,xdim,ydim) and convert it to a vector

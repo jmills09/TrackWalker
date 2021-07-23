@@ -1,7 +1,6 @@
 import torch
 import torchvision
 # from torch.utils.tensorboard import SummaryWriter
-from tensorboardX import SummaryWriter
 from torchvision import datasets, transforms
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,15 +8,14 @@ import torch.optim as optim
 import numpy as np
 from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats
 from MiscFunctions import make_log_stat_dict, reravel_array, make_prediction_vector
-from MiscFunctions import blockPrint, enablePrint
+from MiscFunctions import blockPrint, enablePrint, get_writers
 from DataLoader import get_net_inputs_mc, DataLoader_MC
 from ReformattedDataLoader import ReformattedDataLoader_MC
 from ModelFunctions import LSTMTagger, GRUTagger, run_validation_pass
 import random
 import ROOT
-import socket
 import os
-from datetime import datetime
+
 
 def prepare_sequence(seq, to_ix):
     idxs = [to_ix[w] for w in seq]
@@ -36,6 +34,7 @@ PARAMS['USE_CONV_IM'] = True
 PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
 PARAMS['MASK_WC'] = False
 
+PARAMS['RAND_FLIP_INPUT'] = True
 PARAMS['MIN_TRACK_LENGTH'] = 3.0
 PARAMS['HIDDEN_DIM'] =1024
 PARAMS['PADDING'] =10
@@ -50,27 +49,28 @@ if PARAMS['CENTERPOINT_ISEND']:
      PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
-PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/dest.root"
-PARAMS['TRACK_IDX'] =0
-PARAMS['EVENT_IDX'] =0
+# PARAMS['INFILE'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/Reformat_LArMatch_Pad_010.root"
+PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/hadd_first_pass.root"
+PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/hadd_val_pass.root"
+
+# PARAMS['TRACK_IDX'] =0
+# PARAMS['EVENT_IDX'] =0
 PARAMS['ALWAYS_EDGE'] =True # True points are always placed at the edge of the Padded Box
-# TENSORDIR'] ="runs/Pad20_Hidden1024_500Entries"
 PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] =True # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
 PARAMS['NDIMENSIONS'] = 2 #Not configured to have 3 yet.
-PARAMS['LEARNING_RATE'] =0.0001 # 0.01 is good for the classifier mode,
 
-PARAMS['DO_TENSORLOG'] = True
-PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME
+PARAMS['DO_TENSORLOG'] = False
+PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME Deprecated
 PARAMS['TWOWRITERS'] = True
 
 PARAMS['SAVE_MODEL'] = True #should the network save the model?
-PARAMS['CHECKPOINT_EVERY_N_EPOCHS'] =10000 # if not saving then this doesn't matter
-PARAMS['EPOCHS'] = 1
+PARAMS['CHECKPOINT_EVERY_N_TRACKS'] =500000 # if not saving then this doesn't matter
+PARAMS['EPOCHS'] = 10
 PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
 PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
 PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
-PARAMS['DEVICE'] = 'cuda:0'
+PARAMS['DEVICE'] = 'cuda:3'
 
 PARAMS['LOAD_SIZE']  = 50 #Number of Entries to Load training tracks from
 PARAMS['TRAIN_EPOCH_SIZE'] = -1 #500 # Number of Training Tracks to use (load )
@@ -82,6 +82,10 @@ PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the t
 PARAMS['AREA_TARGET'] = True   # Change network to be predicting
 PARAMS['TARGET_BUFFER'] = 2
 
+PARAMS['LEARNING_RATES'] = [(0,0.0001),(100000,0.00001)] #(Step, New LR), place steps in order.
+PARAMS['NEXTSTEP_LOSS_WEIGHT'] = 10.0
+PARAMS['ENDSTEP_LOSS_WEIGHT']  = 1.0
+
 
 def main():
     print("Let's Get Started.")
@@ -90,26 +94,17 @@ def main():
     pred_h = ROOT.TH2D("Prediction Steps Heatmap","Prediction Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
     targ_h = ROOT.TH2D("Target Steps Heatmap","Target Steps Heatmap",nbins,-0.5,nbins+0.5,nbins,-0.5,nbins+0.5)
 
-    ReformattedDataLoader = ReformattedDataLoader_MC(PARAMS)
-    PARAMS['TRAIN_EPOCH_SIZE'] = ReformattedDataLoader.nentries_train #500 # Number of Training Tracks to use (load )
-    PARAMS['VAL_EPOCH_SIZE']   = ReformattedDataLoader.nentries_val #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
+    ReformattedDataLoader_Train = ReformattedDataLoader_MC(PARAMS,all_train=True)
+    ReformattedDataLoader_Val   = ReformattedDataLoader_MC(PARAMS,all_valid=True)
 
-    writer_train = []
-    writer_val   = []
+    PARAMS['TRAIN_EPOCH_SIZE'] = ReformattedDataLoader_Train.nentries_train #500 # Number of Training Tracks to use (load )
+    PARAMS['VAL_EPOCH_SIZE']   = ReformattedDataLoader_Val.nentries_val #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
+
+    writer_train = None
+    writer_val   = None
     if PARAMS['DO_TENSORLOG']:
-        if PARAMS['TENSORDIR'] == None:
-            current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-            log_dir = os.path.join(
-                'runs', current_time + '_' + socket.gethostname())
+        writer_train, writer_val = get_writers(PARAMS)
 
-            writer_train = SummaryWriter(log_dir = log_dir+"_train")
-            writer_val   = SummaryWriter(log_dir = log_dir+"_val")
-            if not PARAMS['TWOWRITERS']:
-                writer_val = writer_train
-        else:
-            print("Depracated to force tensordir")
-            assert 1==2
-            writer_train = SummaryWriter(log_dir=PARAMS['TENSORDIR'])
     print("/////////////////////////////////////////////////")
     print("/////////////////////////////////////////////////")
     print("/////////////////////////////////////////////////")
@@ -135,8 +130,15 @@ def main():
 
     model = LSTMTagger(PARAMS['EMBEDDING_DIM'], PARAMS['HIDDEN_DIM'], output_dim).to(torch.device(PARAMS['DEVICE']))
     # model = GRUTagger(PARAMS['EMBEDDING_DIM'], PARAMS['HIDDEN_DIM'], output_dim).to(torch.device(PARAMS['DEVICE']))
+    CURRENT_LR_IDX = 0
+    NEXT_LR_TUPLE  = PARAMS['LEARNING_RATES'][CURRENT_LR_IDX]
+    PARAMS['CURRENT_LR'] = NEXT_LR_TUPLE[1]
 
-    optimizer = optim.Adam(model.parameters(), lr=PARAMS['LEARNING_RATE'])
+    optimizer = optim.Adam(model.parameters(), lr=NEXT_LR_TUPLE[1])
+    if len(PARAMS['LEARNING_RATES']) > CURRENT_LR_IDX+1:
+        CURRENT_LR_IDX += 1
+        NEXT_LR_TUPLE  = PARAMS['LEARNING_RATES'][CURRENT_LR_IDX]
+
     is_long = PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] and not PARAMS['AREA_TARGET']
 
 
@@ -144,6 +146,7 @@ def main():
     for epoch in range(PARAMS['EPOCHS']):  # again, normally you would NOT do 300 epochs, it is toy data
         print("\n-----------------------------------\nEpoch:",epoch,"\n")
         train_idx = -1
+
         if not PARAMS['TWOWRITERS']:
             # To Log Stats every N epoch
             log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
@@ -163,12 +166,24 @@ def main():
             if (PARAMS['TRAIN_EPOCH_SIZE'] - number_train_loaded_so_far) < n_to_load:
                 n_to_load = PARAMS['TRAIN_EPOCH_SIZE'] - number_train_loaded_so_far
             print()
-            training_data = ReformattedDataLoader.get_train_data(n_to_load)
+            training_data = ReformattedDataLoader_Train.get_train_data(n_to_load)
             number_train_loaded_so_far += len(training_data)
             print(number_train_loaded_so_far, "Tracks loaded total this epoch.")
 
             for step_images, targ_next_step_idx, targ_area_next_step in training_data:
                 model.train()
+                # Change LR
+                if step_counter == NEXT_LR_TUPLE[0]:
+                    print("\n\nUpdating Learning Rate:")
+                    print("Old LR:",PARAMS['CURRENT_LR'])
+                    print("New LR:",NEXT_LR_TUPLE[1],"\n\n")
+                    for pgroup in optimizer.param_groups:
+                        pgroup['lr'] = NEXT_LR_TUPLE[1]
+                    PARAMS['CURRENT_LR'] = NEXT_LR_TUPLE[1]
+                    if len(PARAMS['LEARNING_RATES']) > CURRENT_LR_IDX+1:
+                        CURRENT_LR_IDX += 1
+                        NEXT_LR_TUPLE  = PARAMS['LEARNING_RATES'][CURRENT_LR_IDX]
+
                 step_counter += 1
                 train_idx += 1
                 # Remember that Pytorch accumulates gradients.
@@ -204,13 +219,14 @@ def main():
                     np_targ = targets_onept.cpu().detach().numpy()
 
                 # loss_weights = torch.tensor(get_loss_weights_v2(targets_next_step_area.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
-
+                print(next_steps_pred_scores)
+                print(targets_next_step_area)
+                assert 1==2
                 loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_next_step_area)
                 vals_per_step = loss_next_steps.shape[1]
-                loss_next_steps_per_step = torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))
-                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))
-                loss_weighted = loss_next_steps_per_step + loss_endpoint#*loss_weights
-                loss_total = loss_weighted
+                loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
+                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
+                loss_total = loss_next_steps_per_step + loss_endpoint
                 loss_total.backward()
                 optimizer.step()
                 np_idx_v = make_prediction_vector(PARAMS, np_pred)
@@ -220,6 +236,9 @@ def main():
                 for ixx in range(np_targ.shape[0]):
                     targ_x, targ_y = unflatten_pos(np_targ[ixx], PARAMS['PADDING']*2+1)
                     targ_h.Fill(targ_x,targ_y)
+                if PARAMS['SAVE_MODEL'] and step_counter%PARAMS['CHECKPOINT_EVERY_N_TRACKS'] == 0:
+                    print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
+                    torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(epoch)+"_"+str(step_counter)+".pt")
                 if PARAMS['DO_TENSORLOG']:
                     calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_EPOCH_SIZE'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                     if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:
@@ -238,6 +257,7 @@ def main():
                             writer_train.add_scalar('Step/train_num_correct_exact', log_stats_dict_step_train['step_train_num_correct_exact'], step_counter)
                             writer_train.add_scalar("Step/train_average_off_distance", log_stats_dict_step_train['step_train_average_distance_off'],step_counter)
                             writer_train.add_scalar("Step/train_frac_misIDas_endpoint", log_stats_dict_step_train['step_train_frac_misIDas_endpoint'],step_counter)
+                            writer_train.add_scalar("Step/train_lr", PARAMS['CURRENT_LR'],step_counter)
                             log_stats_dict_step_train = make_log_stat_dict('step_train')
                         else:
                             writer_train.add_scalar('Step/loss_total', log_stats_dict_step_train['step_loss_average'], step_counter)
@@ -251,6 +271,7 @@ def main():
                             writer_train.add_scalar('Step/num_correct_exact', log_stats_dict_step_train['step_num_correct_exact'], step_counter)
                             writer_train.add_scalar("Step/average_off_distance", log_stats_dict_step_train['step_average_distance_off'],step_counter)
                             writer_train.add_scalar("Step/frac_misIDas_endpoint", log_stats_dict_step_train['step_frac_misIDas_endpoint'],step_counter)
+                            writer_train.add_scalar("Step/lr", PARAMS['CURRENT_LR'],step_counter)
                             log_stats_dict_step_train = make_log_stat_dict('step_')
 
 
@@ -260,7 +281,7 @@ def main():
                             log_stats_dict_step_val = make_log_stat_dict('step_val_')
                         else:
                             log_stats_dict_step_val = make_log_stat_dict('step_')
-                        run_validation_pass(PARAMS, model, ReformattedDataLoader, loss_function_next_step, loss_function_endpoint, writer_val, log_stats_dict_step_val, step_counter, is_epoch=False)
+                        run_validation_pass(PARAMS, model, ReformattedDataLoader_Val, loss_function_next_step, loss_function_endpoint, writer_val, log_stats_dict_step_val, step_counter, is_epoch=False)
 
 
         ####### DO VALIDATION PASS
@@ -270,7 +291,7 @@ def main():
                 log_stats_dict_epoch_val = make_log_stat_dict('epoch_val_')
             else:
                 log_stats_dict_epoch_val = make_log_stat_dict('epoch_')
-            run_validation_pass(PARAMS, model, ReformattedDataLoader, loss_function_next_step, loss_function_endpoint, writer_val, log_stats_dict_epoch_val, epoch, is_epoch=True)
+            run_validation_pass(PARAMS, model, ReformattedDataLoader_Val, loss_function_next_step, loss_function_endpoint, writer_val, log_stats_dict_epoch_val, epoch, is_epoch=True)
 
 
         # if epoch%50 ==0:
@@ -307,6 +328,8 @@ def main():
                 writer_train.add_scalar('Epoch/train_num_correct_exact', log_stats_dict_epoch_train['epoch_train_num_correct_exact'], epoch)
                 writer_train.add_scalar("Epoch/train_average_off_distance", log_stats_dict_epoch_train['epoch_train_average_distance_off'],epoch)
                 writer_train.add_scalar("Epoch/train_frac_misIDas_endpoint", log_stats_dict_epoch_train['epoch_train_frac_misIDas_endpoint'],epoch)
+                writer_train.add_scalar("Epoch/train_lr", PARAMS['CURRENT_LR'],epoch)
+
             else:
                 writer_train.add_scalar('Epoch/loss_total', log_stats_dict_epoch_train['epoch_loss_average'], epoch)
                 writer_train.add_scalar('Epoch/loss_endpointnet', log_stats_dict_epoch_train['epoch_loss_endptnet'], epoch)
@@ -319,11 +342,9 @@ def main():
                 writer_train.add_scalar('Epoch/num_correct_exact', log_stats_dict_epoch_train['epoch_num_correct_exact'], epoch)
                 writer_train.add_scalar("Epoch/average_off_distance", log_stats_dict_epoch_train['epoch_average_distance_off'],epoch)
                 writer_train.add_scalar("Epoch/frac_misIDas_endpoint", log_stats_dict_epoch_train['epoch_frac_misIDas_endpoint'],epoch)
+                writer_train.add_scalar("Epoch/lr", PARAMS['CURRENT_LR'],epoch)
 
-        if PARAMS['SAVE_MODEL']:
-            print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
-        # if PARAMS['SAVE_MODEL'] and epoch%PARAMS['CHECKPOINT_EVERY_N_EPOCHS'] == 0:
-            # torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(epoch)+".pt")
+
     print()
     print("End of Training")
     print()
@@ -370,11 +391,12 @@ def main():
     #
     #         # make_steps_images(step_images_in.cpu().detach().numpy(),"images/PredStep_Final_"+str(train_idx).zfill(2)+"_",PADDING*2+1,pred=np_pred,targ=np_targ)
     canv = ROOT.TCanvas('canv','canv',1000,800)
-    pred_h.SetMaximum(500.0)
-    pred_h.Draw("COLZ")
+    ROOT.gStyle.SetOptStat(0)
+    # pred_h.SetMaximum(500.0)
+    pred_h.DrawNormalized("COLZ")
     canv.SaveAs('pred_h.png')
-    targ_h.SetMaximum(500.0)
-    targ_h.Draw("COLZ")
+    # targ_h.SetMaximum(500.0)
+    targ_h.DrawNormalized("COLZ")
     canv.SaveAs('targ_h.png')
     print("End of Main")
     return 0

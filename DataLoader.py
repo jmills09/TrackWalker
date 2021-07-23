@@ -9,7 +9,7 @@ from MiscFunctions import cropped_np, unravel_array, reravel_array, paste_target
 from LArMatchModel import LArMatchConvNet
 
 class DataLoader_MC:
-    def __init__(self, PARAMS, verbose=False, all_train = False,deploy=False):
+    def __init__(self, PARAMS, verbose=False, all_train = False,all_valid = False,deploy=False):
         self.PARAMS = PARAMS
         self.verbose = verbose
         self.truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
@@ -42,6 +42,11 @@ class DataLoader_MC:
             self.nentries_train = self.nentries_ll
             self.nentries_val   = 0
             self.nentry_val_buffer = self.nentries_train
+        elif all_valid:
+            self.nentries_val = self.nentries_ll
+            self.nentries_train   = 0
+            self.nentry_val_buffer = self.nentries_train
+
         print()
         print("Total Events in File:        ", self.nentries_ll)
         print("Total Events in Training:    ", self.nentries_train)

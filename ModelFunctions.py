@@ -87,7 +87,6 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             end_entry = reformatloader.nentries_val
             start_entry = 0
             end_entry   = 0 + PARAMS['VAL_SAMPLE_SIZE']
-        print("Loading Val Entries ", start_entry+reformatloader.nentry_val_buffer, "to", end_entry+reformatloader.nentry_val_buffer)
         for i in range(PARAMS['VAL_SAMPLE_SIZE']):
             validation_data = reformatloader.get_val_data(1)
             for step_images, targ_next_step_idx, targ_area_next_step in validation_data:
@@ -128,6 +127,7 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
                 loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
                 loss_total = loss_next_steps_per_step + loss_endpoint
                 calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['VAL_SAMPLE_SIZE'], np_pred_endpt, np_targ_endpt, is_train=False, is_epoch=is_epoch)
+        print("Loaded Val Entries ", start_entry, "to", reformatloader.current_val_entry)
         prestring = "step_"
         folder = "Step/"
         if is_epoch:

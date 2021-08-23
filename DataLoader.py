@@ -70,16 +70,17 @@ class DataLoader_MC:
         mctrack_idx_v     = []
         mctrack_length_v  = []
         mctrack_pdg_v     = []
+        mctrack_energy_v  = []
         runs_v            = []
         subruns_v         = []
         event_ids_v       = []
-
         buffer    = 0
         max_entry = self.nentries_train
         if is_val:
             buffer = self.nentry_val_buffer
             max_entry = self.nentries_val
-        assert END_ENTRY < max_entry
+        if END_ENTRY > max_entry:
+            END_ENTRY = max_entry
         assert END_ENTRY > START_ENTRY
         assert START_ENTRY >= 0
         is_val_string = "validation" if is_val else "training"
@@ -90,6 +91,9 @@ class DataLoader_MC:
                 print("Loading Entry:", i, "of range", START_ENTRY+buffer, END_ENTRY+buffer)
             if self.PARAMS['USE_CONV_IM'] == False:
                 self.iocv.read_entry(i)
+            else:
+                self.iocv.read_entry(i)
+
             self.ioll.go_to(i)
 
             ev_mctrack = self.ioll.get_data(larlite.data.kMCTrack, "mcreco")
@@ -109,6 +113,16 @@ class DataLoader_MC:
                 subrun = ev_wire.subrun()
                 event = ev_wire.event()
                 meta = y_wire_image2d.meta()
+
+            ev_wire    = self.iocv.get_data(larcv.kProductImage2D,"wire")
+            img_v = ev_wire.Image2DArray()
+            y_wire_image2d = img_v[2]
+            y_defwire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
+
+            ev_ancestor    = self.iocv.get_data(larcv.kProductImage2D,"ancestor")
+            anc_v = ev_ancestor.Image2DArray()
+            y_anc_image2d = anc_v[2]
+            y_anc_np = larcv.as_ndarray(y_anc_image2d) # I am Speed.
 
             # Get MC Track X Y Points
             trk_xpt_list = []
@@ -179,11 +193,14 @@ class DataLoader_MC:
                 # Many of the following categories are just a reformatting of each other
                 # They are duplicated to allow for easy network mode switching
                 stepped_images = [] # List of cropped images as 2D numpy array
+                stepped_wire_images = []
                 flat_stepped_images = [] # list of cropped images as flattened 1D np array
                 next_positions = [] # list of next step positions as np(x,y)
                 flat_next_positions = [] # list of next step positions in flattened single coord idx
                 flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
                 xy_shifts = [] # list of X,Y shifts to take the next step
+                charge_in_wire_v  = []
+                charge_in_truth_v = []
                 for idx in range(len(steps_x)):
                     # if idx > 1:
                     #     continue
@@ -195,11 +212,21 @@ class DataLoader_MC:
                         next_step_x = steps_x[idx+1]
                         next_step_y = steps_y[idx+1]
                     cropped_step_image = cropped_np(full_image, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_wire_image = cropped_np(y_defwire_np, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_anc_image  = cropped_np(y_anc_np, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_anc_image[cropped_anc_image < 0] = 0
+                    cropped_anc_image[cropped_anc_image > 0] = 1
+                    chg_in_wire  = np.sum(cropped_wire_image)
+                    chg_in_truth = np.sum(cropped_anc_image*cropped_wire_image)
+                    charge_in_wire_v.append(chg_in_wire)
+                    charge_in_truth_v.append(chg_in_truth)
+
                     required_padding_x = self.PARAMS['PADDING'] - step_x
                     required_padding_y = self.PARAMS['PADDING'] - step_y
 
                     stepped_images.append(cropped_step_image)
                     flat_stepped_images.append(unravel_array(cropped_step_image))
+                    stepped_wire_images.append(cropped_wire_image)
 
                     if idx != len(steps_x)-1:
                         target_x = required_padding_x + next_step_x
@@ -232,11 +259,12 @@ class DataLoader_MC:
                             np_xy_shift = np.array([0.0,0.0])
                             xy_shifts.append(np_xy_shift)
                 if self.PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-                    training_data.append((stepped_images,flat_next_positions,flat_area_positions))
+                    training_data.append((stepped_images,flat_next_positions,flat_area_positions,stepped_wire_images,charge_in_wire_v,charge_in_truth_v))
                     entries_v.append(i)
                     mctrack_idx_v.append(trk_idx)
                     mctrack_length_v.append(track_length)
                     mctrack_pdg_v.append(mctrack.PdgCode())
+                    mctrack_energy_v.append(mctrack.Start().E())
                     runs_v.append(run)
                     subruns_v.append(subrun)
                     event_ids_v.append(event)
@@ -244,13 +272,14 @@ class DataLoader_MC:
                         print("Clipping Training Load Size at ",len(training_data))
                         is_val_string = "validation" if is_val else "training"
                         print("Loading ",len(training_data), "tracks for",is_val_string)
-                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v
+                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v
                 else:
                     training_data.append((stepped_images,xy_shifts))
                     entries_v.append(i)
                     mctrack_idx_v.append(trk_idx)
                     mctrack_length_v.append(track_length)
                     mctrack_pdg_v.append(mctrack.PdgCode())
+                    mctrack_energy_v.append(mctrack.Start().E())
                     runs_v.append(run)
                     subruns_v.append(subrun)
                     event_ids_v.append(event)
@@ -258,20 +287,22 @@ class DataLoader_MC:
                         print("Clipping Training Load Size at ",len(training_data))
                         is_val_string = "validation" if is_val else "training"
                         print("Loading ",len(training_data), "tracks for",is_val_string)
-                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v
+                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v
                 # FLAG
                 # End of MCTrack Loop
 
         is_val_string = "validation" if is_val else "training"
         print("Loading ",len(training_data), "tracks for",is_val_string)
-        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v
+        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v
 
-    def load_dlreco_inputs_onestop_deploy(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, is_val=True):
+
+    def load_dlreco_inputs_onestop_deploy(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, run_backwards = False, is_val=True):
         training_data     = []
         entries_v         = []
         mctrack_idx_v     = []
         mctrack_length_v  = []
         mctrack_pdg_v     = []
+        mctrack_energy_v  = []
         runs_v            = []
         subruns_v         = []
         event_ids_v       = []
@@ -285,7 +316,8 @@ class DataLoader_MC:
         if is_val:
             buffer = self.nentry_val_buffer
             max_entry = self.nentries_val
-        assert END_ENTRY < max_entry
+        if END_ENTRY > max_entry:
+            END_ENTRY = max_entry
         assert END_ENTRY > START_ENTRY
         assert START_ENTRY >= 0
         is_val_string = "validation" if is_val else "training"
@@ -323,6 +355,11 @@ class DataLoader_MC:
             y_wire_image2d = img_v[2]
             y_defwire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
 
+            ev_ancestor    = self.iocv.get_data(larcv.kProductImage2D,"ancestor")
+            anc_v = ev_ancestor.Image2DArray()
+            y_anc_image2d = anc_v[2]
+            y_anc_np = larcv.as_ndarray(y_anc_image2d) # I am Speed.
+
             # Get MC Track X Y Points
             trk_xpt_list = []
             trk_ypt_list = []
@@ -354,8 +391,18 @@ class DataLoader_MC:
                 last_z   = 0
                 step_idx = -1
                 sce_track = self.truthtrack_SCE.applySCE(mctrack)
+
+
+
+
                 for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
-                    sce_step = sce_track.LocationAtPoint(pos_idx)
+                    sce_step = None
+                    if run_backwards:
+                        sce_step = sce_track.LocationAtPoint(sce_track.NumberTrajectoryPoints()-1-pos_idx)
+                    else:
+                        sce_step = sce_track.LocationAtPoint(pos_idx)
+
+
                     step_idx += 1
                     x = sce_step.X()
                     y = sce_step.Y()
@@ -375,6 +422,7 @@ class DataLoader_MC:
                         continue
                     xpt_list.append(col)
                     ypt_list.append(row)
+                    break
                     if len(xpt_list) == 1:
                         print("Printing Col and Row:\n",col, row)
 
@@ -389,16 +437,19 @@ class DataLoader_MC:
                 steps_y = new_steps_y
                 if self.verbose:
                     print("         After Inserted Track Points", len(steps_x))
-                if len(steps_x) < 2: #Don't  include tracks without a step and then endpoint
-                    continue
+                # if len(steps_x) < 2: #Don't  include tracks without a step and then endpoint
+                #     continue
                 # Many of the following categories are just a reformatting of each other
                 # They are duplicated to allow for easy network mode switching
                 stepped_images = [] # List of cropped images as 2D numpy array
+                stepped_wire_images = []
                 flat_stepped_images = [] # list of cropped images as flattened 1D np array
                 next_positions = [] # list of next step positions as np(x,y)
                 flat_next_positions = [] # list of next step positions in flattened single coord idx
                 flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
                 xy_shifts = [] # list of X,Y shifts to take the next step
+                charge_in_wire_v  = []
+                charge_in_truth_v = []
                 for idx in range(len(steps_x)):
                     # if idx > 1:
                     #     continue
@@ -409,12 +460,23 @@ class DataLoader_MC:
                     if idx != len(steps_x)-1:
                         next_step_x = steps_x[idx+1]
                         next_step_y = steps_y[idx+1]
+
                     cropped_step_image = cropped_np(full_image, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_wire_image = cropped_np(y_defwire_np, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_anc_image  = cropped_np(y_anc_np, step_x, step_y, self.PARAMS['PADDING'])
+                    cropped_anc_image[cropped_anc_image < 0] = 0
+                    cropped_anc_image[cropped_anc_image > 0] = 1
+                    chg_in_wire  = np.sum(cropped_wire_image)
+                    chg_in_truth = np.sum(cropped_anc_image*cropped_wire_image)
+                    charge_in_wire_v.append(chg_in_wire)
+                    charge_in_truth_v.append(chg_in_truth)
+
                     required_padding_x = self.PARAMS['PADDING'] - step_x
                     required_padding_y = self.PARAMS['PADDING'] - step_y
 
                     stepped_images.append(cropped_step_image)
                     flat_stepped_images.append(unravel_array(cropped_step_image))
+                    stepped_wire_images.append(cropped_wire_image)
 
                     if idx != len(steps_x)-1:
                         target_x = required_padding_x + next_step_x
@@ -447,11 +509,12 @@ class DataLoader_MC:
                             np_xy_shift = np.array([0.0,0.0])
                             xy_shifts.append(np_xy_shift)
                 if self.PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-                    training_data.append((stepped_images,flat_next_positions,flat_area_positions))
+                    training_data.append((stepped_images,flat_next_positions,flat_area_positions,stepped_wire_images,charge_in_wire_v,charge_in_truth_v))
                     entries_v.append(i)
                     mctrack_idx_v.append(trk_idx)
                     mctrack_length_v.append(track_length)
                     mctrack_pdg_v.append(mctrack.PdgCode())
+                    mctrack_energy_v.append(mctrack.Start().E())
                     runs_v.append(run)
                     subruns_v.append(subrun)
                     event_ids_v.append(event)
@@ -464,13 +527,14 @@ class DataLoader_MC:
                         print("Clipping Training Load Size at ",len(training_data))
                         is_val_string = "validation" if is_val else "training"
                         print("Loading ",len(training_data), "tracks for",is_val_string)
-                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
+                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
                 else:
                     training_data.append((stepped_images,xy_shifts))
                     entries_v.append(i)
                     mctrack_idx_v.append(trk_idx)
                     mctrack_length_v.append(track_length)
                     mctrack_pdg_v.append(mctrack.PdgCode())
+                    mctrack_energy_v.append(mctrack.Start().E())
                     runs_v.append(run)
                     subruns_v.append(subrun)
                     event_ids_v.append(event)
@@ -482,13 +546,13 @@ class DataLoader_MC:
                         print("Clipping Training Load Size at ",len(training_data))
                         is_val_string = "validation" if is_val else "training"
                         print("Loading ",len(training_data), "tracks for",is_val_string)
-                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
+                        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
                 # FLAG
                 # End of MCTrack Loop
 
         is_val_string = "validation" if is_val else "training"
         print("Loading ",len(training_data), "tracks for",is_val_string)
-        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
+        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v
 
     def get_net_inputs_mc(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, is_val=False):
         image_list, xs, ys, runs, subruns, events, filepaths, entries, track_pdgs = self.load_rootfile_MC_Positions(START_ENTRY, END_ENTRY, is_val=is_val)

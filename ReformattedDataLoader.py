@@ -65,6 +65,7 @@ class ReformattedDataLoader_MC:
         -13:"ANTIMUON",
         }
     def get_train_data(self, n_load):
+        dim = 2*self.PARAMS['PADDING']+1
         start_entry = self.current_train_entry
         end_entry   = self.current_train_entry + n_load
         if end_entry > self.nentries_train:
@@ -77,17 +78,34 @@ class ReformattedDataLoader_MC:
             stacked_step_images = self.intree.stacked_step_images.tonumpy().copy()
             stacked_targ_idx    = self.intree.stacked_targ_idx.tonumpy().copy()
             stacked_targ_area   = self.intree.stacked_targ_area.tonumpy().copy()
+            stacked_wire_images    = self.intree.stacked_wire_images.tonumpy().copy()
             flat_area_positions = unstack(stacked_targ_area)
+            stacked_wire_images = np.expand_dims(stacked_wire_images,axis=3)
+            stacked_step_images      = np.reshape(stacked_step_images,(-1,dim,dim,16)) #16 is nLarMatch Features
+
 
             if self.RAND_FLIP_INPUTS:
                 if (np.random.randint(0,2) > 0.5): #Coin Flip
-                    stacked_step_images = np.flip(stacked_step_images,axis=0)
+                    stacked_step_images = np.flip(stacked_step_images,axis=1)
                     stacked_targ_idx    = flip_target_idx_xdim(stacked_targ_idx,self.PARAMS)
                     flat_area_positions = flip_flat_area_positions_xdim(flat_area_positions, self.PARAMS)
+                    stacked_wire_images = np.flip(stacked_wire_images,axis=1)
 
-            stepped_images = np.reshape(stacked_step_images,(-1,21,21,16))
+            stepped_images = stacked_step_images
+            if self.PARAMS['APPEND_WIREIM']:
+                stepped_images = np.concatenate((stepped_images,stacked_wire_images),axis=3)
+
             flat_next_positions = unstack(stacked_targ_idx)
             training_data.append((stepped_images,flat_next_positions,flat_area_positions))
+
+            # from MiscFunctions import save_im
+            # import os
+            # for f in range(16):
+            #     save_im(stepped_images[0,:,:,f],savename='larmatchfeat_im_test/larmatch_feat_'+str(f).zfill(2),canv_x=1000,canv_y=1000)
+            # convert_cmd = "convert "+"larmatchfeat_im_test/*.png "+'larmatchfeat_im_test/featcheck.pdf'
+            # print(convert_cmd)
+            # os.system(convert_cmd)
+            # assert 1==2
 
         self.current_train_entry = end_entry
         if self.current_train_entry == self.nentries_train:
@@ -95,6 +113,7 @@ class ReformattedDataLoader_MC:
         return training_data
 
     def get_val_data(self, n_load):
+        dim = 2*self.PARAMS['PADDING']+1
         start_entry = self.current_val_entry
         end_entry   = self.current_val_entry + n_load
         if end_entry > self.nentries_val:
@@ -109,16 +128,22 @@ class ReformattedDataLoader_MC:
             stacked_step_images = self.intree.stacked_step_images.tonumpy()
             stacked_targ_idx    = self.intree.stacked_targ_idx.tonumpy()
             stacked_targ_area   = self.intree.stacked_targ_area.tonumpy()
-            flat_next_positions = unstack(stacked_targ_idx)
+            stacked_wire_images    = self.intree.stacked_wire_images.tonumpy().copy()
+            flat_area_positions = unstack(stacked_targ_area)
+            stacked_wire_images = np.expand_dims(stacked_wire_images,axis=3)
 
             if self.RAND_FLIP_INPUTS:
                 if (np.random.randint(0,2) > 0.5): #Coin Flip
                     stacked_step_images = np.flip(stacked_step_images,axis=0)
                     stacked_targ_idx    = flip_target_idx_xdim(stacked_targ_idx,self.PARAMS)
                     flat_area_positions = flip_flat_area_positions_xdim(flat_area_positions, self.PARAMS)
+                    stacked_wire_images = np.flip(stacked_wire_images,axis=1)
 
-            stepped_images = np.reshape(stacked_step_images,(-1,21,21,16))
-            flat_area_positions = unstack(stacked_targ_area)
+
+            stepped_images = np.reshape(stacked_step_images,(-1,dim,dim,16)) #16 is nLarMatch Features
+            if self.PARAMS['APPEND_WIREIM']:
+                stepped_images = np.concatenate((stepped_images,stacked_wire_images),axis=3)
+            flat_next_positions = unstack(stacked_targ_idx)
             val_data.append((stepped_images,flat_next_positions,flat_area_positions))
 
         self.current_val_entry = end_entry

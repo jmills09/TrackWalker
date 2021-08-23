@@ -34,13 +34,18 @@ PARAMS['USE_CONV_IM'] = True
 PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
 PARAMS['MASK_WC'] = False
 
-PARAMS['RAND_FLIP_INPUT'] = True
+PARAMS['RAND_FLIP_INPUT'] = False
 PARAMS['MIN_TRACK_LENGTH'] = 3.0
 PARAMS['HIDDEN_DIM'] =1024
 PARAMS['PADDING'] =10
+PARAMS['APPEND_WIREIM'] = True
+
 PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1) # N_Features
 if PARAMS['USE_CONV_IM']:
-    PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*16 # 16 Features per pixel in larmatch
+    if PARAMS['APPEND_WIREIM']:
+        PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*17 # 16 Features per pixel in larmatch plus wireim
+    else:
+        PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*16 # 16 Features per pixel in larmatch
 PARAMS['NUM_CLASSES'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)+1 # Bonus Class is for the end of track class
 PARAMS['TRACKEND_CLASS'] = (PARAMS['PADDING']*2+1)**2
 PARAMS['CENTERPOINT_ISEND'] = True
@@ -50,7 +55,7 @@ if PARAMS['CENTERPOINT_ISEND']:
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
 # PARAMS['INFILE'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/Reformat_LArMatch_Pad_010.root"
-PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/hadd_first_pass.root"
+PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/hadd_train_pass.root"
 PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/hadd_val_pass.root"
 
 # PARAMS['TRACK_IDX'] =0
@@ -59,32 +64,35 @@ PARAMS['ALWAYS_EDGE'] =True # True points are always placed at the edge of the P
 PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] =True # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
 PARAMS['NDIMENSIONS'] = 2 #Not configured to have 3 yet.
 
-PARAMS['DO_TENSORLOG'] = False
+PARAMS['DO_TENSORLOG'] = True
 PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME Deprecated
 PARAMS['TWOWRITERS'] = True
 
 PARAMS['SAVE_MODEL'] = True #should the network save the model?
-PARAMS['CHECKPOINT_EVERY_N_TRACKS'] =500000 # if not saving then this doesn't matter
-PARAMS['EPOCHS'] = 10
+PARAMS['CHECKPOINT_EVERY_N_TRACKS'] = 250000 # if not saving then this doesn't matter
+PARAMS['EPOCHS'] = 5
+PARAMS['STOP_AFTER_NTRACKS'] = 999999999999999999999
 PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
-PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
+PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 1000
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
-PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
-PARAMS['DEVICE'] = 'cuda:3'
+PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 1000
+PARAMS['DEVICE'] = 'cuda:2'
 
-PARAMS['LOAD_SIZE']  = 50 #Number of Entries to Load training tracks from
+PARAMS['LOAD_SIZE']  = 100 #Number of Entries to Load training tracks from
 PARAMS['TRAIN_EPOCH_SIZE'] = -1 #500 # Number of Training Tracks to use (load )
 PARAMS['VAL_EPOCH_SIZE'] = -1 #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
-PARAMS['VAL_SAMPLE_SIZE'] = 100
+PARAMS['VAL_SAMPLE_SIZE'] = 500
 
 PARAMS['SHUFFLE_DATASET'] = False
 PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
 PARAMS['AREA_TARGET'] = True   # Change network to be predicting
 PARAMS['TARGET_BUFFER'] = 2
 
-PARAMS['LEARNING_RATES'] = [(0,0.0001),(100000,0.00001)] #(Step, New LR), place steps in order.
-PARAMS['NEXTSTEP_LOSS_WEIGHT'] = 10.0
+PARAMS['LEARNING_RATES'] = [(0, 0.001), (10000, 0.0001), (100000, 1e-05), (1000000, 1e-06)] #(Step, New LR), place steps in order.
+PARAMS['NEXTSTEP_LOSS_WEIGHT'] = 20.0
 PARAMS['ENDSTEP_LOSS_WEIGHT']  = 1.0
+PARAMS['LOAD_PREVIOUS_CHECKPOINT'] = ''
+
 
 
 def main():
@@ -102,8 +110,9 @@ def main():
 
     writer_train = None
     writer_val   = None
+    writer_dir   = None
     if PARAMS['DO_TENSORLOG']:
-        writer_train, writer_val = get_writers(PARAMS)
+        writer_train, writer_val, writer_dir = get_writers(PARAMS)
 
     print("/////////////////////////////////////////////////")
     print("/////////////////////////////////////////////////")
@@ -130,11 +139,17 @@ def main():
 
     model = LSTMTagger(PARAMS['EMBEDDING_DIM'], PARAMS['HIDDEN_DIM'], output_dim).to(torch.device(PARAMS['DEVICE']))
     # model = GRUTagger(PARAMS['EMBEDDING_DIM'], PARAMS['HIDDEN_DIM'], output_dim).to(torch.device(PARAMS['DEVICE']))
+    if PARAMS['LOAD_PREVIOUS_CHECKPOINT'] != '':
+        if (PARAMS['DEVICE'] != 'cpu'):
+            model.load_state_dict(torch.load(PARAMS['LOAD_PREVIOUS_CHECKPOINT'], map_location={'cpu':PARAMS['DEVICE'],'cuda:0':PARAMS['DEVICE'],'cuda:1':PARAMS['DEVICE'],'cuda:2':PARAMS['DEVICE'],'cuda:3':PARAMS['DEVICE']}))
+        else:
+            model.load_state_dict(torch.load(PARAMS['LOAD_PREVIOUS_CHECKPOINT'], map_location={'cpu':'cpu','cuda:0':'cpu','cuda:1':'cpu','cuda:2':'cpu','cuda:3':'cpu'}))
+
     CURRENT_LR_IDX = 0
     NEXT_LR_TUPLE  = PARAMS['LEARNING_RATES'][CURRENT_LR_IDX]
     PARAMS['CURRENT_LR'] = NEXT_LR_TUPLE[1]
 
-    optimizer = optim.Adam(model.parameters(), lr=NEXT_LR_TUPLE[1])
+    optimizer = optim.Adam(model.parameters(), lr=NEXT_LR_TUPLE[1],weight_decay=1e-04)
     if len(PARAMS['LEARNING_RATES']) > CURRENT_LR_IDX+1:
         CURRENT_LR_IDX += 1
         NEXT_LR_TUPLE  = PARAMS['LEARNING_RATES'][CURRENT_LR_IDX]
@@ -219,9 +234,7 @@ def main():
                     np_targ = targets_onept.cpu().detach().numpy()
 
                 # loss_weights = torch.tensor(get_loss_weights_v2(targets_next_step_area.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
-                print(next_steps_pred_scores)
-                print(targets_next_step_area)
-                assert 1==2
+
                 loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_next_step_area)
                 vals_per_step = loss_next_steps.shape[1]
                 loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
@@ -238,7 +251,7 @@ def main():
                     targ_h.Fill(targ_x,targ_y)
                 if PARAMS['SAVE_MODEL'] and step_counter%PARAMS['CHECKPOINT_EVERY_N_TRACKS'] == 0:
                     print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
-                    torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(epoch)+"_"+str(step_counter)+".pt")
+                    torch.save(model.state_dict(), writer_dir+"TrackerCheckPoint_"+str(epoch)+"_"+str(step_counter)+".pt")
                 if PARAMS['DO_TENSORLOG']:
                     calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_EPOCH_SIZE'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                     if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:
@@ -282,7 +295,8 @@ def main():
                         else:
                             log_stats_dict_step_val = make_log_stat_dict('step_')
                         run_validation_pass(PARAMS, model, ReformattedDataLoader_Val, loss_function_next_step, loss_function_endpoint, writer_val, log_stats_dict_step_val, step_counter, is_epoch=False)
-
+                if step_counter%PARAMS["STOP_AFTER_NTRACKS"] == 0:
+                    break
 
         ####### DO VALIDATION PASS
         if PARAMS['DO_TENSORLOG'] and epoch%PARAMS['VALIDATION_EPOCH_LOGINTERVAL']==0:
@@ -344,6 +358,9 @@ def main():
                 writer_train.add_scalar("Epoch/frac_misIDas_endpoint", log_stats_dict_epoch_train['epoch_frac_misIDas_endpoint'],epoch)
                 writer_train.add_scalar("Epoch/lr", PARAMS['CURRENT_LR'],epoch)
 
+        if step_counter%PARAMS["STOP_AFTER_NTRACKS"] == 0:
+            break
+
 
     print()
     print("End of Training")
@@ -354,7 +371,7 @@ def main():
     # See what the scores are after training
     if PARAMS['SAVE_MODEL']:
         print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
-        torch.save(model.state_dict(), "model_checkpoints/TrackerCheckPoint_"+str(PARAMS['EPOCHS'])+"_Fin.pt")
+        torch.save(model.state_dict(), writer_dir+"TrackerCheckPoint_"+str(PARAMS['EPOCHS'])+"_Fin.pt")
     # with torch.no_grad():
     #     train_idx = -1
     #     for step_images, next_steps in training_data:
@@ -394,10 +411,10 @@ def main():
     ROOT.gStyle.SetOptStat(0)
     # pred_h.SetMaximum(500.0)
     pred_h.DrawNormalized("COLZ")
-    canv.SaveAs('pred_h.png')
+    # canv.SaveAs('pred_h.png')
     # targ_h.SetMaximum(500.0)
     targ_h.DrawNormalized("COLZ")
-    canv.SaveAs('targ_h.png')
+    # canv.SaveAs('targ_h.png')
     print("End of Main")
     return 0
 

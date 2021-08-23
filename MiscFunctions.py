@@ -6,15 +6,121 @@ import socket
 from datetime import datetime
 from tensorboardX import SummaryWriter
 
+def removeTrackWidth(wire_im, larmatch_im, x, y, old_dx, old_dy, halfWidth = 5):
+    # Given two arrays and a current xy, zero out pixels on perpendicular slow
+    # to dx / dy
+    # Calc perpendicular slope
+    print()
+    print("removeWidth")
+    print(x,y)
+    print(old_dx, old_dy)
+    print()
+    dx = old_dy
+    dy = 0-old_dx
+    print(dx, dy)
+    if abs(dx) >= abs(dy):
+        DX = halfWidth
+        # if dx != 0 and dy != 0:
+        #     DX = int((halfWidth*1.0)/(dy*1.0/dx*1.0))
+        low  = 0  if dx > 0 else DX*-1
+        high = DX if dx > 0 else 0
+        ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
+        for ddx in ddx_list:
+            ddy = int(float(ddx)*float(dy)/float(dx))
+            wire_im[x+ddx,y+ddy] = 500
+            larmatch_im[x+ddx,y+ddy,:] = 500
+    else:
+        DY = halfWidth
+        # if dy != 0 and dx != 0:
+            # DY = int((halfWidth*1.0)/(dx*1.0/dy*1.0))
+        low  = 0  if dy > 0 else DY*-1
+        high = DY if dy > 0 else 0
+        print(low, high)
+        ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
+        for ddy in ddy_list:
+            ddx = int(float(ddy)*float(dx)/float(dy))
+            wire_im[x+ddx,y+ddy] = 500
+            larmatch_im[x+ddx,y+ddy,:] = 500
+    # Now do it in the other direction of the perpendicular slope
+    dx = 0-old_dy
+    dy = old_dx
+    print("Other Direction")
+    print(dx, dy)
+
+    if abs(dx) >= abs(dy):
+        DX = halfWidth
+        # if dx != 0 and dy != 0:
+        #     DX = int((halfWidth*1.0)/(dy*1.0/dx*1.0))
+        low  = 0  if dx <= 0 else DX*-1
+        high = DX if dx <= 0 else 0
+        ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
+        for ddx in ddx_list:
+            ddy = int(float(ddx)*float(dy)/float(dx))
+            wire_im[x+ddx,y+ddy] = 250
+            larmatch_im[x+ddx,y+ddy,:] = 250
+    else:
+        DY = halfWidth
+        # if dy != 0 and dx != 0:
+        #     DY = int((halfWidth*1.0)/(dx*1.0/dy*1.0))
+        low  = 0  if dy > 0 else DY*-1
+        high = DY if dy > 0 else 0
+        print(low, high)
+        ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
+        for ddy in ddy_list:
+            ddx = int(float(ddy)*float(dx)/float(dy))
+            wire_im[x+ddx,y+ddy] = 250
+            larmatch_im[x+ddx,y+ddy,:] = 250
+    # assert 1==2
+    return 0
+
+
+def removeChargeOnTrackSegment(wire_im, larmatch_im, this_x, this_y, last_x, last_y):
+    if this_x == last_x and this_y == last_y:
+        return 0
+    # Given two arrays, and a current and last step, go through and
+    # zero out pixels between the last and current step
+    dx = this_x - last_x
+    dy = this_y - last_y
+    # If moving more in x than y
+    wire_im[last_x,last_y] = 500
+    larmatch_im[last_x,last_y,:] = 500
+    removeTrackWidth(wire_im, larmatch_im, last_x, last_y, dx, dy)
+    if abs(dx) >= abs(dy):
+        low  = 0  if dx > 0 else dx
+        high = dx if dx > 0 else 0
+        ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
+        for ddx in ddx_list:
+            ddy = int(float(ddx)*float(dy)/float(dx))
+            wire_im[last_x+ddx,last_y+ddy] = 500
+            larmatch_im[last_x+ddx,last_y+ddy,:] = 500
+            removeTrackWidth(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
+    else:
+        low  = 0  if dy > 0 else dy
+        high = dy if dy > 0 else 0
+        ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
+        for ddy in ddy_list:
+            ddx = int(float(ddy)*float(dx)/float(dy))
+            wire_im[last_x+ddx,last_y+ddy] = 500
+            larmatch_im[last_x+ddx,last_y+ddy,:] = 500
+            removeTrackWidth(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
+
+
+    return 0
+
+
+
+
 def get_writers(PARAMS):
+    writer_dir = ''
     if PARAMS['TENSORDIR'] == None:
         current_time = datetime.now().strftime('%b%d_%H-%M-%S')
         top_log_dir = os.path.join(
-            'runs', current_time + '_' + socket.gethostname())
+            'runs/new_runs', current_time + '_' + socket.gethostname())
         sub_log_dir = socket.gethostname()
         print("DIRNAME:", top_log_dir+"/"+sub_log_dir)
         # if not os.path.exists(top_log_dir):
         #     os.mkdir(top_log_dir)
+        writer_dir = top_log_dir+"/"
         writer_train = SummaryWriter(top_log_dir+"/"+sub_log_dir+"_train")
         writer_val   = SummaryWriter(top_log_dir+"/"+sub_log_dir+"_val")
         if not PARAMS['TWOWRITERS']:
@@ -28,8 +134,8 @@ def get_writers(PARAMS):
             signal.alarm(wait_time)
             s = get_user_input(wait_time)
             # disable the alarm after success
-            signal.alarm(0)
             logfile.write(s)
+            signal.alarm(0)
             for k,v in PARAMS.items():
                 line = "PARAMS['"+k+"'] = "+str(v)+"\n"
                 logfile.write(line)
@@ -40,7 +146,7 @@ def get_writers(PARAMS):
         print("Deprecated to force tensordir")
         assert 1==2
         writer_train = SummaryWriter(top_log_dir=PARAMS['TENSORDIR'])
-    return writer_train, writer_val
+    return writer_train, writer_val, writer_dir
 
 def interrupted(signum, frame):
     # "called when read times out"
@@ -189,11 +295,14 @@ def get_pred_targ_dist(pred, targ, dim):
         return dist
 
 
-def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None,canv_x=-1,canv_y=-1):
+def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_x=None,true_next_y=None,canv_x=-1,canv_y=-1,title=""):
     ROOT.gStyle.SetOptStat(0)
     x_len = np_arr.shape[0]
     y_len = np_arr.shape[1]
-    hist = ROOT.TH2F(savename,savename,x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
+    if title=="":
+        title=savename
+
+    hist = ROOT.TH2F(title,title,x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
     for x in range(x_len):
         for y in range(y_len):
             hist.SetBinContent(x+1,y+1,np_arr[x,y])
@@ -205,8 +314,7 @@ def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_
         yscale = canv_y
     # yscale = int(4000.0*np_arr.shape[1]/np_arr.shape[0]-200)
     canv = ROOT.TCanvas('canv','canv',xscale,yscale)
-
-    hist.SetMaximum(50.0)
+    # hist.SetMaximum(50.0)
     hist.Draw("COLZ")
     hist_vert = ROOT.TH2F("vert","vert",x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
     vert_x = (x_len)/2
@@ -244,7 +352,65 @@ def save_im(np_arr, savename="file",pred_next_x=None,pred_next_y=None,true_next_
     canv.SaveAs(savename+'.png')
     return 0
 
-def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None):
+def save_im_trackline(np_arr, trackline, savename="file",canv_x=-1,canv_y=-1,title=""):
+    ROOT.gStyle.SetOptStat(0)
+    x_len = np_arr.shape[0]
+    y_len = np_arr.shape[1]
+    if title=="":
+        title=savename
+
+    hist = ROOT.TH2F(title,title,x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
+    for x in range(x_len):
+        for y in range(y_len):
+            hist.SetBinContent(x+1,y+1,np_arr[x,y])
+    xscale = 1000
+    yscale =  800
+    if canv_x != -1:
+        xscale = canv_x
+    if canv_y != -1:
+        yscale = canv_y
+    # yscale = int(4000.0*np_arr.shape[1]/np_arr.shape[0]-200)
+    canv = ROOT.TCanvas('canv','canv',xscale,yscale)
+    hist.SetMaximum(100.0)
+    hist.Draw("COLZ")
+    hist_vert = ROOT.TH2F("vert","vert",x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
+    vert_x = (x_len)/2
+    vert_y = (y_len)/2
+    # hist_vert.Fill(vert_x,vert_y)
+    # hist_vert.SetMarkerStyle(29)
+    # hist_vert.SetMarkerColor(1)
+    # hist_vert.SetMarkerSize(2)
+    # hist_vert.Draw("SAME")
+
+    # graph_vert.SetMarkerLineWidth(5)
+    # if pred_next_x != None:
+    #     graph_next = ROOT.TGraph()
+    #     graph_next.SetPoint(0,pred_next_x+0.5,pred_next_y+0.5)
+    #     graph_next.SetMarkerStyle(22)
+    #     graph_next.SetMarkerColor(2)
+    #     graph_next.SetMarkerSize(2)
+    #     # graph_next.SetMarkerLineWidth(5)
+    #     graph_next.Draw("PSAME")
+    # if true_next_x != None:
+    #     graph_targ = ROOT.TGraph()
+    #     graph_targ.SetPoint(0,true_next_x+0.5,true_next_y+0.5)
+    #     graph_targ.SetMarkerStyle(23)
+    #     graph_targ.SetMarkerColor(4)
+    #     graph_targ.SetMarkerSize(2)
+    #     # graph_targ.SetMarkerLineWidth(5)
+    #     graph_targ.Draw("PSAME")
+    # graph_vert = ROOT.TGraph()
+    # graph_vert.SetPoint(0,int(vert_x)+0.5,int(vert_y)+0.5)
+    # graph_vert.SetMarkerStyle(8)
+    # graph_vert.SetMarkerColor(1)
+    # graph_vert.SetMarkerSize(1)
+    trackline.SetMarkerSize(1)
+    trackline.Draw("SAMEC*")
+
+    canv.SaveAs(savename+'.png')
+    return 0
+
+def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None,endpoint_scores=None):
     for im_ix in range(np_images.shape[0]):
     # for im_ix in range(2):
         y = np_images[im_ix]
@@ -265,7 +431,12 @@ def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None):
             if true_next_pos == dim**2: #If true track end
                 true_next_x = y.shape[0]/2-0.5
                 true_next_y = y.shape[1]/2-0.5
-        save_im(y,string_pattern+str(im_ix).zfill(3),pred_next_x,pred_next_y,true_next_x,true_next_y)
+        if endpoint_scores == None:
+            save_im(y,string_pattern+str(im_ix).zfill(3),pred_next_x,pred_next_y,true_next_x,true_next_y)
+        else:
+            thistitle = string_pattern+str(im_ix).zfill(3)+"_{:.2f}".format(endpoint_scores[im_ix])
+            save_im(y,string_pattern+str(im_ix).zfill(3),pred_next_x,pred_next_y,true_next_x,true_next_y,title=thistitle)
+
     return 0
     # save_im(cropped_step_image,'step'+str(idx))
 

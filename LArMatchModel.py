@@ -20,6 +20,7 @@ from larmatch_affinityfield_regressor import LArMatchAffinityFieldRegressor
 
 from ctypes import c_int,c_double
 import numpy as np
+from MiscFunctions import save_im
 
 class LArMatchConvNet:
     def __init__(self, PARAMS):
@@ -148,6 +149,17 @@ class LArMatchConvNet:
         #slice away the padded extra pixels larmatchnet uses
         detach_outfeat_y_transposed = detach_outfeat_y_transposed[:,0:1008,:]
 
+
+        # y_wire_image2d = adc_v[2]
+        # y_wire_np = larcv.as_ndarray(y_wire_image2d)
+        # save_im(y_wire_np,savename="larmatchfeat_im_test/adc_check_yplane",canv_x=4000,canv_y=1000)
+        # print("\n\nShapecheck:",detach_outfeat_y_transposed.shape)
+        # for f in range(16):
+        #     save_im(detach_outfeat_y_transposed[:,:,f],savename='larmatchfeat_im_test/larmatch_feat_'+str(f),canv_x=4000,canv_y=1000)
+        # convert_cmd = "convert "+"larmatchfeat_im_test/*.png "+'larmatchfeat_im_test/featcheck.pdf'
+        # print(convert_cmd)
+        # os.system(convert_cmd)
+        # assert 1==2
         print("\n\n\n\nLArMatch Done\n")
         print(time.time() - t_start_larmatch, "Seconds for LArMatch\n\n\n\n")
         return detach_outfeat_y_transposed, ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()

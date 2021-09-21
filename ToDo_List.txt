@@ -1,20 +1,14 @@
 Need:
-Create Loss Dynamic During Trainin
-Feed in Convolutional Net Features
-Pulling Train Data and Validation Data dynamically rather than all at once in the beginning
 Accuracy By Particle
-Dump Training PARAMS into txt file in the tensorboard folder w/ custom string
 Add Variance to Loss to minimize variance in x and y
 Weighting for Area Prediction? Necessary?
-UPDATE METRICS FOR AREA PREDICTION
+3D!!!
 
 Want:
 Size of Accuracy Threshold search area adjustable by hyperparam
 Length of Proposed Step
 Length of Truth Step
-Make some Event Display Images
 Hyperparam Dict into a global variable
-Feed Network the current length of track as input
 Make forward model pass same regardless of train/val (function)
 
 Done:
@@ -30,10 +24,16 @@ Change Hyperparams to a dictionary
 Load and format data function to DataLoader.py
 Add option for network endpoint to be the center of crop, not special class
 Change network loss&weights to be predicting area of pixels
-
 Added preprocessing of input data for much faster loading from preprocessed file
 Changed tensorboard logs so that train and val are overlaid. Easier to read.
 DEPLOY SCRIPT WORKING! Yay!
 Split train and val into two dataloaders for better tracking of events.
 Added way to schedule learning rate changes
 Added Method to flip input data on x-axis so tracks not all in beamdir
+
+UPDATE METRICS FOR AREA PREDICTION
+Dump Training PARAMS into txt file in the tensorboard folder w/ custom string
+Pulling Train Data and Validation Data dynamically rather than all at once in the beginning
+Create Loss Dynamic During Trainin
+Feed in LArMatch Convolutional Net Features!!!
+Make some Event Display Images

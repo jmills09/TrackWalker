@@ -12,7 +12,11 @@ class DataLoader_MC:
     def __init__(self, PARAMS, verbose=False, all_train = False,all_valid = False,deploy=False):
         self.PARAMS = PARAMS
         self.verbose = verbose
-        self.truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
+        self.truthtrack_SCE   = ublarcvapp.mctools.TruthTrackSCE()
+        self.SCEUBooNE        = larutil.SpaceChargeMicroBooNE()
+        self.NeutrinoVertexer = ublarcvapp.mctools.NeutrinoVertex()
+        self.LArbysMC         = ublarcvapp.mctools.LArbysMC()
+        self.LArbysMC.initialize()
         self.iocv = None
         self.LArMatchNet = None
         if PARAMS['USE_CONV_IM'] == False:
@@ -38,6 +42,7 @@ class DataLoader_MC:
         self.nentries_train = int(self.nentries_ll*0.8)
         self.nentries_val   = self.nentries_ll-int(self.nentries_ll*0.8)
         self.nentry_val_buffer = self.nentries_train
+        self.currentEntry = 0
         if all_train:
             self.nentries_train = self.nentries_ll
             self.nentries_val   = 0
@@ -295,8 +300,224 @@ class DataLoader_MC:
         print("Loading ",len(training_data), "tracks for",is_val_string)
         return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v
 
+    def load_deploy_versatile(self, mode='MCNU', prongDict=None):
+        deployDict = {}
+        deployDict['seedX']          = None
+        deployDict['seedY']          = None
+        deployDict['entry']          = None
+        deployDict['run']            = None
+        deployDict['subrun']         = None
+        deployDict['event']          = None
+        deployDict['featureImages']  = None
+        deployDict['mcProngs']       = None
+        deployDict['mcProngs_thresh']= None
 
-    def load_dlreco_inputs_onestop_deploy(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, run_backwards = False, is_val=True):
+        print("Loading Entry:", self.currentEntry)
+        deployDict['entry'] = self.currentEntry
+        self.iocv.read_entry(self.currentEntry)
+        self.ioll.go_to(self.currentEntry)
+        if prongDict != None:
+            self.LArbysMC.process(self.iocv, self.ioll)
+            nPart        = self.LArbysMC._nproton + self.LArbysMC._nlepton + self.LArbysMC._nmeson
+            nPart_thresh = self.LArbysMC._nproton_60mev + self.LArbysMC._nlepton_35mev + self.LArbysMC._nmeson_35mev
+            deployDict['mcProngs'] = nPart
+            deployDict['mcProngs_thresh'] = nPart_thresh
+
+        if mode in ["MCNU","MCNU_NUE","MCNU_BNB"]:
+            passFlag = self.getDeployDictMCNU(deployDict)
+            self.currentEntry += 1
+            return deployDict, passFlag
+
+
+
+    def getDeployDictMCNU(self, deployDict):
+        neutrino_vertex = self.NeutrinoVertexer.getPos3DwSCE(self.ioll, self.SCEUBooNE)
+
+        if is_inside_boundaries(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]) == False:
+            if self.verbose:
+                print(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2], " Out of Bounds")
+            return 0
+
+        larmatchFeat, deployDict['run'], deployDict['subrun'], deployDict['event'], meta = \
+                                                     self.LArMatchNet.get_larmatch_features(self.currentEntry)
+        ev_wire    = self.iocv.get_data(larcv.kProductImage2D,"wire")
+        y_defwire_np = larcv.as_ndarray(ev_wire.Image2DArray()[2]) # I am Speed.
+        y_defwire_np = np.expand_dims(y_defwire_np,axis=2)
+        deployDict['featureImages'] = np.concatenate((larmatchFeat,y_defwire_np),axis=2)
+        deployDict['seedX'],deployDict['seedY'] = getprojectedpixel(meta,neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2])
+        return 1
+
+    def load_dlreco_inputs_onestop_deploy_neutrinovtx(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, run_backwards = False, is_val=True, showermode=False):
+        training_data     = []
+        entries_v         = []
+        mctrack_idx_v     = []
+        mctrack_length_v  = []
+        mctrack_pdg_v     = []
+        mctrack_energy_v  = []
+        runs_v            = []
+        subruns_v         = []
+        event_ids_v       = []
+        larmatch_images_v = []
+        wire_images_v     = []
+        x_starts_v        = []
+        y_starts_v        = []
+        ssnettrack_ims_v  = []
+        ssnetshower_ims_v = []
+        n_mcProngs        = []
+        n_mcProngs_thresh = []
+
+
+
+        buffer    = 0
+        max_entry = self.nentries_train
+        if is_val:
+            buffer = self.nentry_val_buffer
+            max_entry = self.nentries_val
+        if END_ENTRY > max_entry:
+            END_ENTRY = max_entry
+        assert END_ENTRY > START_ENTRY
+        assert START_ENTRY >= 0
+        is_val_string = "validation" if is_val else "training"
+        print("Loading Entries from",START_ENTRY+buffer, "to",END_ENTRY+buffer,"for",is_val_string)
+        for i in range(START_ENTRY+buffer, END_ENTRY+buffer):
+            if self.verbose:
+                print()
+                print("Loading Entry:", i, "of range", START_ENTRY+buffer, END_ENTRY+buffer)
+            self.iocv.read_entry(i)
+            self.ioll.go_to(i)
+            self.LArbysMC.process(self.iocv, self.ioll)
+            nPart        = self.LArbysMC._nproton + self.LArbysMC._nlepton + self.LArbysMC._nmeson
+            nPart_thresh = self.LArbysMC._nproton_60mev + self.LArbysMC._nlepton_35mev + self.LArbysMC._nmeson_35mev
+
+            meta     = None
+            run      = -1
+            subrun   = -1
+            event    = -1
+            if self.PARAMS['USE_CONV_IM']:
+                y_wire_np, run, subrun, event, meta = self.LArMatchNet.get_larmatch_features(i)
+            else:
+                ev_wire    = self.iocv.get_data(larcv.kProductImage2D,"wire")
+                img_v = ev_wire.Image2DArray()
+                y_wire_image2d = img_v[2]
+                y_wire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
+                run = ev_wire.run()
+                subrun = ev_wire.subrun()
+                event = ev_wire.event()
+                meta = y_wire_image2d.meta()\
+            # Deply needs wire image as well:
+            ev_wire    = self.iocv.get_data(larcv.kProductImage2D,"wire")
+            img_v = ev_wire.Image2DArray()
+            y_wire_image2d = img_v[2]
+            y_defwire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
+
+            ev_ancestor    = self.iocv.get_data(larcv.kProductImage2D,"ancestor")
+            anc_v = ev_ancestor.Image2DArray()
+            y_anc_image2d = anc_v[2]
+            y_anc_np = larcv.as_ndarray(y_anc_image2d) # I am Speed.
+
+            # ev_ssnet    = self.iocv.get_data(larcv.kProductImage2D,"ubspurn_plane2")
+            ev_ssnet    = self.iocv.get_data(larcv.kProductSparseImage,"sparseuresnetout")
+
+			# // 0 -> HIP (Pions+ProtonsTruth)
+			# // 1 -> MIP (Muons)
+			# // 2 -> Shower
+			# // 3 -> Delta Ray
+			# // 4 -> Michel
+            ssnet_v = ev_ssnet.SparseImageArray().at(2).as_Image2D();
+            # y_ssnet_image2d = ssnet_v[2]
+            y_ssnet_track_np = larcv.as_ndarray(ssnet_v[0]) +  larcv.as_ndarray(ssnet_v[1])# I am Speed.
+            y_ssnet_shower_np = larcv.as_ndarray(ssnet_v[2]) +  larcv.as_ndarray(ssnet_v[3]) +  larcv.as_ndarray(ssnet_v[4])# I am Speed.
+
+            ########
+            neutrino_vertex = self.NeutrinoVertexer.getPos3DwSCE(self.ioll, self.SCEUBooNE)
+            # ev_mctruth = self.ioll.get_data(larlite.data.kMCTruth,"generator");
+            # mctruth = ev_mctruth.at(0)
+            # start = mctruth.GetNeutrino().Nu().Trajectory().front()
+            # tick = CrossingPointsAnaMethods.getTick(start, 4050.0, None)
+            # x = start.X()
+            # y = start.Y()
+            # z = start.Z()
+            # neutrino_vertex = [x,y,z]
+            ########
+            if is_inside_boundaries(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]) == False:
+                if self.verbose:
+                    print(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2], " Out of Bounds")
+                continue
+
+            col,row = getprojectedpixel(meta,neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2])
+            stepped_images = [] # List of cropped images as 2D numpy array
+            stepped_wire_images = []
+            flat_stepped_images = [] # list of cropped images as flattened 1D np array
+            next_positions = [] # list of next step positions as np(x,y)
+            flat_next_positions = [] # list of next step positions in flattened single coord idx
+            flat_area_positions = [] # list of np_zeros with 1s pasted in a square around target
+            xy_shifts = [] # list of X,Y shifts to take the next step
+            charge_in_wire_v  = []
+            charge_in_truth_v = []
+
+            cropped_step_image = cropped_np(y_wire_np, col, row, self.PARAMS['PADDING'])
+            cropped_wire_image = cropped_np(y_defwire_np, col, row, self.PARAMS['PADDING'])
+            cropped_anc_image  = cropped_np(y_anc_np, col, row, self.PARAMS['PADDING'])
+            cropped_anc_image[cropped_anc_image < 0] = 0
+            cropped_anc_image[cropped_anc_image > 0] = 1
+            chg_in_wire  = np.sum(cropped_wire_image)
+            chg_in_truth = np.sum(cropped_anc_image*cropped_wire_image)
+            charge_in_wire_v.append(chg_in_wire)
+            charge_in_truth_v.append(chg_in_truth)
+
+            required_padding_x = self.PARAMS['PADDING'] - col
+            required_padding_y = self.PARAMS['PADDING'] - row
+
+            stepped_images.append(cropped_step_image)
+            flat_stepped_images.append(unravel_array(cropped_step_image))
+            stepped_wire_images.append(cropped_wire_image)
+
+            if self.PARAMS['AREA_TARGET']:
+                next_positions.append(np.array([self.PARAMS['PADDING'],self.PARAMS['PADDING']])) #should correspond to centerpoint
+                flat_next_positions.append((self.PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
+                targ_np = np.zeros((cropped_step_image.shape[0],cropped_step_image.shape[1]))
+                flat_area_positions.append(unravel_array(paste_target(targ_np,self.PARAMS['PADDING'],self.PARAMS['PADDING'],self.PARAMS['TARGET_BUFFER']))) #should correspond to centerpoint
+                np_xy_shift = np.array([0.0,0.0])
+                xy_shifts.append(np_xy_shift)
+            elif self.PARAMS['CENTERPOINT_ISEND']:
+                next_positions.append(np.array([self.PARAMS['PADDING'],self.PARAMS['PADDING']])) #should correspond to centerpoint
+                flat_next_positions.append((self.PARAMS['NUM_CLASSES']-1)/2) #should correspond to centerpoint
+                np_xy_shift = np.array([0.0,0.0])
+                xy_shifts.append(np_xy_shift)
+            else:
+                next_positions.append(np.array([-1.0,-1.0]))
+                flat_next_positions.append(self.PARAMS['NUM_CLASSES']-1)
+                np_xy_shift = np.array([0.0,0.0])
+                xy_shifts.append(np_xy_shift)
+
+            training_data.append((stepped_images,flat_next_positions,flat_area_positions,stepped_wire_images,charge_in_wire_v,charge_in_truth_v))
+            entries_v.append(i)
+            mctrack_idx_v.append(0) # Always 1 neutrino idx
+            mctrack_length_v.append(-1) # No track length for a vertex
+            mctrack_pdg_v.append(-1)#mctrack.PdgCode()) # No PDG
+            mctrack_energy_v.append(-1)#mctrack.Start().E())
+            runs_v.append(run)
+            subruns_v.append(subrun)
+            event_ids_v.append(event)
+            larmatch_images_v.append(np.copy(y_wire_np))
+            wire_images_v.append(np.copy(y_defwire_np))
+            x_starts_v.append(col)
+            y_starts_v.append(row)
+            ssnettrack_ims_v.append(y_ssnet_track_np)
+            ssnetshower_ims_v.append(y_ssnet_shower_np)
+            n_mcProngs.append(nPart)
+            n_mcProngs_thresh.append(nPart_thresh)
+
+            if len(training_data) == MAX_TRACKS_PULL:
+                print("Clipping Training Load Size at ",len(training_data))
+                is_val_string = "validation" if is_val else "training"
+                print("Loading ",len(training_data), "tracks for",is_val_string)
+                return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v, ssnettrack_ims_v, ssnetshower_ims_v, n_mcProngs, n_mcProngs_thresh
+
+        return training_data, entries_v, mctrack_idx_v, mctrack_length_v, mctrack_pdg_v, mctrack_energy_v, runs_v, subruns_v, event_ids_v, larmatch_images_v, wire_images_v, x_starts_v, y_starts_v, ssnettrack_ims_v, ssnetshower_ims_v, n_mcProngs, n_mcProngs_thresh
+
+
+    def load_dlreco_inputs_onestop_deploy(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, run_backwards = False, is_val=True, showermode=False):
         training_data     = []
         entries_v         = []
         mctrack_idx_v     = []
@@ -333,6 +554,9 @@ class DataLoader_MC:
             self.ioll.go_to(i)
 
             ev_mctrack = self.ioll.get_data(larlite.data.kMCTrack, "mcreco")
+            if showermode:
+                # ev_mctrack = self.ioll.get_data(larlite.data.kMCTruth,  "generator" );
+                ev_mctrack = self.ioll.get_data(larlite.data.kMCShower, "mcreco")
             # Get Wire ADC Image to a Numpy Array
             meta     = None
             run      = -1
@@ -367,47 +591,51 @@ class DataLoader_MC:
             trk_idx = -1
             if self.verbose:
                 print("N Tracks", len(ev_mctrack))
-            for mctrack in ev_mctrack:
+            mctrack = None
+            nTracks = len(ev_mctrack) #if not showermode else 1
+            # for mctrack in ev_mctrack:
+            for mc_idx in range(nTracks):
+                mctrack = ev_mctrack.at(mc_idx)
+                # mctrack = ev_mctrack.at(mc_idx) if not showermode else ev_mctrack.at(0).GetNeutrino().Nu()
                 trk_idx += 1
-                if mctrack.PdgCode() not in self.PDG_to_Part or self.PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON","PIPLUS","PIMINUS","PI0"]:
-                    continue
+                if showermode:
+                    if trk_idx != 0:
+                        continue
+                if not showermode:
+                    if mctrack.PdgCode() not in self.PDG_to_Part or self.PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON","PIPLUS","PIMINUS","PI0"]:
+                        continue
                 print(mctrack.PdgCode())
-                track_length = mctrack_length(mctrack)
-                if self.verbose:
-                    print("Track Index:",trk_idx)
-                    print("     Track Length", track_length)
-                    if mctrack.PdgCode()  in self.PDG_to_Part:
-                        print("     Track PDG:", self.PDG_to_Part[mctrack.PdgCode()])
-                    else:
-                        print("     Track PDG:", mctrack.PdgCode())
-                if track_length < self.PARAMS['MIN_TRACK_LENGTH']:
+                track_length = -1
+                if not showermode:
+                    track_length = mctrack_length(mctrack)
                     if self.verbose:
-                        print("Skipping Short Track")
-                    continue
+                        print("Track Index:",trk_idx)
+                        print("     Track Length", track_length)
+                        if mctrack.PdgCode()  in self.PDG_to_Part:
+                            print("     Track PDG:", self.PDG_to_Part[mctrack.PdgCode()])
+                        else:
+                            print("     Track PDG:", mctrack.PdgCode())
+                    if track_length < self.PARAMS['MIN_TRACK_LENGTH']:
+                        if self.verbose:
+                            print("Skipping Short Track")
+                        continue
+
                 xpt_list = []
                 ypt_list = []
                 last_x   = 0
                 last_y   = 0
                 last_z   = 0
                 step_idx = -1
-                sce_track = self.truthtrack_SCE.applySCE(mctrack)
-
-
-
-
-                for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
-                    sce_step = None
-                    if run_backwards:
-                        sce_step = sce_track.LocationAtPoint(sce_track.NumberTrajectoryPoints()-1-pos_idx)
-                    else:
-                        sce_step = sce_track.LocationAtPoint(pos_idx)
-
-
-                    step_idx += 1
+                sce_track = None
+                if showermode:
+                    sce_track = mctrack
+                    sce_step  = sce_track.Start()
                     x = sce_step.X()
                     y = sce_step.Y()
                     z = sce_step.Z()
                     if is_inside_boundaries(x,y,z) == False:
+                        if self.verbose:
+                            print(x,y,z, " Out of Bounds")
                         continue
                     if step_idx != 0:
                         step_dist = ((x-last_x)**2 + (y-last_y)**2 + (z-last_z)**2)**0.5
@@ -422,9 +650,42 @@ class DataLoader_MC:
                         continue
                     xpt_list.append(col)
                     ypt_list.append(row)
-                    break
-                    if len(xpt_list) == 1:
-                        print("Printing Col and Row:\n",col, row)
+                    track_length = ((sce_track.End().Z() - z)**2 + (sce_track.End().Y() - y)**2 + (sce_track.End().X() - x)**2 )**0.2
+                    if self.verbose:
+                        print("Breaking Shower")
+
+                else:
+                    sce_track = self.truthtrack_SCE.applySCE(mctrack)
+                    for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
+                        sce_step = None
+                        if run_backwards:
+                            sce_step = sce_track.LocationAtPoint(sce_track.NumberTrajectoryPoints()-1-pos_idx)
+                        else:
+                            sce_step = sce_track.LocationAtPoint(pos_idx)
+
+
+                        step_idx += 1
+                        x = sce_step.X()
+                        y = sce_step.Y()
+                        z = sce_step.Z()
+                        if is_inside_boundaries(x,y,z) == False:
+                            continue
+                        if step_idx != 0:
+                            step_dist = ((x-last_x)**2 + (y-last_y)**2 + (z-last_z)**2)**0.5
+                            # step_dist_3d.append(step_dist)
+                        last_x = x
+                        last_y = y
+                        last_z = z
+                        # if trk_idx == 6:
+                        #     print(str(round(x)).zfill(4),str(round(y)).zfill(4),str(round(z)).zfill(4),str(round(t)).zfill(4))
+                        col,row = getprojectedpixel(meta,x,y,z)
+                        if len(xpt_list) !=0 and col == xpt_list[len(xpt_list)-1] and row == ypt_list[len(ypt_list)-1]:
+                            continue
+                        xpt_list.append(col)
+                        ypt_list.append(row)
+                        break
+                        if len(xpt_list) == 1:
+                            print("Printing Col and Row:\n",col, row)
 
                 full_image = y_wire_np
                 steps_x = xpt_list

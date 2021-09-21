@@ -105,6 +105,9 @@ class LArMatchConvNet:
         ev_adc = self.iomanager.get_data(larcv.kProductImage2D, self.adc_producer)
         adc_v = ev_adc.Image2DArray()
         ev_badch    = self.iomanager.get_data(larcv.kProductChStatus, self.chstatus_producer)
+        print("SKIPPING LARMATCHFEATGRAB")
+        return np.zeros((3456, 1008, 16)), ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()
+
 
         if self.has_wirecell:
             # make wirecell masked image

@@ -10,14 +10,9 @@ def removeTrackWidth(wire_im, larmatch_im, x, y, old_dx, old_dy, halfWidth = 5):
     # Given two arrays and a current xy, zero out pixels on perpendicular slow
     # to dx / dy
     # Calc perpendicular slope
-    print()
-    print("removeWidth")
-    print(x,y)
-    print(old_dx, old_dy)
-    print()
+
     dx = old_dy
     dy = 0-old_dx
-    print(dx, dy)
     if abs(dx) >= abs(dy):
         DX = halfWidth
         # if dx != 0 and dy != 0:
@@ -27,25 +22,22 @@ def removeTrackWidth(wire_im, larmatch_im, x, y, old_dx, old_dy, halfWidth = 5):
         ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
         for ddx in ddx_list:
             ddy = int(float(ddx)*float(dy)/float(dx))
-            wire_im[x+ddx,y+ddy] = 500
-            larmatch_im[x+ddx,y+ddy,:] = 500
+            wire_im[x+ddx,y+ddy] = 0
+            larmatch_im[x+ddx,y+ddy,:] = 0
     else:
         DY = halfWidth
         # if dy != 0 and dx != 0:
             # DY = int((halfWidth*1.0)/(dx*1.0/dy*1.0))
         low  = 0  if dy > 0 else DY*-1
         high = DY if dy > 0 else 0
-        print(low, high)
         ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
         for ddy in ddy_list:
             ddx = int(float(ddy)*float(dx)/float(dy))
-            wire_im[x+ddx,y+ddy] = 500
-            larmatch_im[x+ddx,y+ddy,:] = 500
+            wire_im[x+ddx,y+ddy] = 0
+            larmatch_im[x+ddx,y+ddy,:] = 0
     # Now do it in the other direction of the perpendicular slope
     dx = 0-old_dy
     dy = old_dx
-    print("Other Direction")
-    print(dx, dy)
 
     if abs(dx) >= abs(dy):
         DX = halfWidth
@@ -56,21 +48,28 @@ def removeTrackWidth(wire_im, larmatch_im, x, y, old_dx, old_dy, halfWidth = 5):
         ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
         for ddx in ddx_list:
             ddy = int(float(ddx)*float(dy)/float(dx))
-            wire_im[x+ddx,y+ddy] = 250
-            larmatch_im[x+ddx,y+ddy,:] = 250
+            wire_im[x+ddx,y+ddy] = 0
+            larmatch_im[x+ddx,y+ddy,:] = 0
     else:
         DY = halfWidth
         # if dy != 0 and dx != 0:
         #     DY = int((halfWidth*1.0)/(dx*1.0/dy*1.0))
         low  = 0  if dy > 0 else DY*-1
         high = DY if dy > 0 else 0
-        print(low, high)
         ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
         for ddy in ddy_list:
             ddx = int(float(ddy)*float(dx)/float(dy))
-            wire_im[x+ddx,y+ddy] = 250
-            larmatch_im[x+ddx,y+ddy,:] = 250
-    # assert 1==2
+            wire_im[x+ddx,y+ddy] = 0
+            larmatch_im[x+ddx,y+ddy,:] = 0
+    return 0
+
+def removeTrackWidth_v2(wire_im, larmatch_im, x, y, old_dx, old_dy, halfWidth = 5):
+    xmin = x-halfWidth   if x-halfWidth   >= 0 else 0
+    xmax = x+halfWidth+1 if x+halfWidth+1 <= wire_im.shape[0] else wire_im.shape[0]
+    ymin = y-halfWidth   if y-halfWidth   >= 0 else 0
+    ymax = y+halfWidth+1 if y+halfWidth+1 <= wire_im.shape[1] else wire_im.shape[1]
+    wire_im[xmin:xmax,ymin:ymax]       = 0
+    larmatch_im[xmin:xmax,ymin:ymax,:] = 0
     return 0
 
 
@@ -82,27 +81,83 @@ def removeChargeOnTrackSegment(wire_im, larmatch_im, this_x, this_y, last_x, las
     dx = this_x - last_x
     dy = this_y - last_y
     # If moving more in x than y
-    wire_im[last_x,last_y] = 500
-    larmatch_im[last_x,last_y,:] = 500
-    removeTrackWidth(wire_im, larmatch_im, last_x, last_y, dx, dy)
+    wire_im[last_x,last_y] = 0
+    larmatch_im[last_x,last_y,:] = 0
+    removeTrackWidth_v2(wire_im, larmatch_im, last_x, last_y, dx, dy)
     if abs(dx) >= abs(dy):
         low  = 0  if dx > 0 else dx
         high = dx if dx > 0 else 0
         ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
         for ddx in ddx_list:
             ddy = int(float(ddx)*float(dy)/float(dx))
-            wire_im[last_x+ddx,last_y+ddy] = 500
-            larmatch_im[last_x+ddx,last_y+ddy,:] = 500
-            removeTrackWidth(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
+            wire_im[last_x+ddx,last_y+ddy] = 0
+            larmatch_im[last_x+ddx,last_y+ddy,:] = 0
+            removeTrackWidth_v2(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
     else:
         low  = 0  if dy > 0 else dy
         high = dy if dy > 0 else 0
         ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
         for ddy in ddy_list:
             ddx = int(float(ddy)*float(dx)/float(dy))
-            wire_im[last_x+ddx,last_y+ddy] = 500
-            larmatch_im[last_x+ddx,last_y+ddy,:] = 500
-            removeTrackWidth(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
+            wire_im[last_x+ddx,last_y+ddy] = 0
+            larmatch_im[last_x+ddx,last_y+ddy,:] = 0
+            removeTrackWidth_v2(wire_im, larmatch_im, last_x+ddx, last_y+ddy, dx, dy)
+
+
+    return 0
+
+
+def removeTrackWidth_v2(wire_im, larmatch_im, mask_im, x, y, old_dx, old_dy, halfWidth = 2):
+    xmin = x-halfWidth   if x-halfWidth   >= 0 else 0
+    xmax = x+halfWidth+1 if x+halfWidth+1 <= wire_im.shape[0] else wire_im.shape[0]
+    ymin = y-halfWidth   if y-halfWidth   >= 0 else 0
+    ymax = y+halfWidth+1 if y+halfWidth+1 <= wire_im.shape[1] else wire_im.shape[1]
+    # wire_im[xmin:xmax,ymin:ymax]       = 0
+    mask_im[xmin:xmax,ymin:ymax]       = 0
+    # larmatch_im[xmin:xmax,ymin:ymax,:] = 0
+    return 0
+
+
+def removeChargeOnTrackSegment(wire_im, larmatch_im, mask_im, this_x, this_y, last_x, last_y):
+    if this_x == last_x and this_y == last_y:
+        return 0
+    # Given two arrays, and a current and last step, go through and
+    # zero out pixels between the last and current step
+    dx = this_x - last_x
+    dy = this_y - last_y
+    # If moving more in x than y
+    # wire_im[last_x,last_y] = 0
+    mask_im[last_x,last_y] = 0
+    # larmatch_im[last_x,last_y,:] = 0
+    removeTrackWidth_v2(wire_im, larmatch_im, mask_im, last_x, last_y, dx, dy)
+    if abs(dx) >= abs(dy):
+        low  = 0  if dx > 0 else dx
+        high = dx if dx > 0 else 0
+        ddx_list = range(low,high) if dx > 0 else reversed(range(low,high))
+        for ddx in ddx_list:
+            ddy = int(float(ddx)*float(dy)/float(dx))
+            if last_x+ddx < 0:
+                ddx = 0-last_x
+            elif last_x + ddx > mask_im.shape[0]-1:
+                ddx = mask_im.shape[0]-1 - last_x
+            if last_y+ddy < 0:
+                ddy = 0-last_y
+            elif last_y + ddy > mask_im.shape[1]-1:
+                ddy = mask_im.shape[1]-1 - last_y
+            # wire_im[last_x+ddx,last_y+ddy] = 0
+            mask_im[last_x+ddx,last_y+ddy] = 0
+            # larmatch_im[last_x+ddx,last_y+ddy,:] = 0
+            removeTrackWidth_v2(wire_im, larmatch_im, mask_im, last_x+ddx, last_y+ddy, dx, dy)
+    else:
+        low  = 0  if dy > 0 else dy
+        high = dy if dy > 0 else 0
+        ddy_list = range(low,high) if dy > 0 else reversed(range(low,high))
+        for ddy in ddy_list:
+            ddx = int(float(ddy)*float(dx)/float(dy))
+            # wire_im[last_x+ddx,last_y+ddy] = 0
+            mask_im[last_x+ddx,last_y+ddy] = 0
+            # larmatch_im[last_x+ddx,last_y+ddy,:] = 0
+            removeTrackWidth_v2(wire_im, larmatch_im, mask_im, last_x+ddx, last_y+ddy, dx, dy)
 
 
     return 0
@@ -410,6 +465,48 @@ def save_im_trackline(np_arr, trackline, savename="file",canv_x=-1,canv_y=-1,tit
     canv.SaveAs(savename+'.png')
     return 0
 
+def save_im_multitracks(filename, wireIm_np, recoTrack_tgraphs_v, vertex_x, vertex_y):
+    crop_pad = 50
+    croppedIm = cropped_np(wireIm_np, vertex_x, vertex_y, crop_pad)
+    ROOT.gStyle.SetOptStat(0)
+    x_len = croppedIm.shape[0]
+    y_len = croppedIm.shape[1]
+    if filename=="":
+        filename="Test"
+
+    hist = ROOT.TH2F(filename,filename,x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0)
+    for x in range(x_len):
+        for y in range(y_len):
+            hist.SetBinContent(x+1,y+1,croppedIm[x,y])
+    canv = ROOT.TCanvas('canv','canv',1200,1000)
+    hist.Draw("COLZ")
+    vtxTgraph = ROOT.TGraph()
+    vtxTgraph.SetMarkerColor(1)
+    vtxTgraph.SetMarkerStyle(24)
+    vtxTgraph.SetMarkerSize(3)
+    vtxTgraph.SetPoint(0,crop_pad+0.5,crop_pad+0.5)
+
+    remadeTgraphs = []
+    for idx in range(len(recoTrack_tgraphs_v)):
+        remadeTgraphs.append(ROOT.TGraph())
+
+    colorWheel = [2,7,4,3,6,5,9,12,46,13,14,15,16]
+    for idx in range(len(recoTrack_tgraphs_v)):
+        remadeTgraphs[idx].SetMarkerColor(colorWheel[idx])
+        remadeTgraphs[idx].SetMarkerSize(2)
+        remadeTgraphs[idx].SetMarkerStyle(24)
+        remadeTgraphs[idx].SetLineWidth(2)
+        remadeTgraphs[idx].SetLineColor(colorWheel[idx])
+
+        for ptIdx in range(recoTrack_tgraphs_v[idx].GetN()):
+            oldX, oldY = ROOT.Double(0), ROOT.Double(0)
+            recoTrack_tgraphs_v[idx].GetPoint(ptIdx,oldX,oldY)
+            remadeTgraphs[idx].SetPoint(ptIdx,oldX-vertex_x+crop_pad,oldY-vertex_y+crop_pad)
+        remadeTgraphs[idx].Draw("SAMELP")
+    vtxTgraph.Draw("SAMELP")
+    canv.SaveAs(filename+".png")
+
+
 def make_steps_images(np_images,string_pattern,dim,pred=None,targ=None,endpoint_scores=None):
     for im_ix in range(np_images.shape[0]):
     # for im_ix in range(2):
@@ -491,7 +588,7 @@ def cropped_np(np_arr,x_center,y_center,padding):
     if len(np_arr.shape) == 2:
         new_arr = np.zeros((padding*2+1,padding*2+1))
     else:
-        new_arr = np.zeros((padding*2+1,padding*2+1,16))
+        new_arr = np.zeros((padding*2+1,padding*2+1,np_arr.shape[2]))
     x_st  = x_center - padding
     x_end = x_center + padding + 1
     y_st  = y_center - padding
@@ -605,3 +702,137 @@ def blockPrint():
 def enablePrint():
     sys.stdout = sys.__stdout__
     sys.stdout = sys.__stderr__
+
+def getProngDict():
+    mcProngs_h = ROOT.TH1D("mcProngs_h", "mcProngs_h",10,0.,10.)
+    mcProngs_h.SetTitle("mcProngs")
+    mcProngs_h.SetXTitle("nProngs")
+    mcProngs_h.SetYTitle("Events in Sample")
+    mcProngs_thresh_h = ROOT.TH1D("mcProngs_thresh_h", "mcProngs_thresh_h",10,0.,10.)
+    mcProngs_thresh_h.SetTitle("mcProngs")
+    mcProngs_thresh_h.SetXTitle("nProngs")
+    mcProngs_thresh_h.SetYTitle("Events in Sample")
+
+    recoProngs_h = ROOT.TH1D("recoProngs_h", "recoProngs_h",10,0.,10.)
+    recoProngs_h.SetTitle("recoProngs")
+    recoProngs_h.SetXTitle("nProngs")
+    recoProngs_h.SetYTitle("Events in Sample")
+    reco_m_mcProngs_h = ROOT.TH1D("reco_m_mcProngs_h", "reco_m_mcProngs_h",20,-10.,10.)
+    reco_m_mcProngs_h.SetTitle("Reco - MC Prongs")
+    reco_m_mcProngs_h.SetXTitle("Reco - MC Prongs")
+    reco_m_mcProngs_h.SetYTitle("Events in Sample")
+    reco_m_mcProngs_thresh_h = ROOT.TH1D("reco_m_mcProngs_thresh_h", "reco_m_mcProngs_thresh_h",20,-10.,10.)
+    reco_m_mcProngs_thresh_h.SetTitle("Reco - MC Prongs_thresh")
+    reco_m_mcProngs_thresh_h.SetXTitle("Reco - MC Prongs_thresh")
+    reco_m_mcProngs_thresh_h.SetYTitle("Events in Sample")
+    dict = {}
+    dict['mcProngs_h']=mcProngs_h
+    dict['mcProngs_thresh_h']=mcProngs_thresh_h
+    dict['recoProngs_h']=recoProngs_h
+    dict['reco_m_mcProngs_h']=reco_m_mcProngs_h
+    dict['reco_m_mcProngs_thresh_h']=reco_m_mcProngs_thresh_h
+    return dict
+
+def saveProngDict(prongDict,dir='',mode=""):
+    # tmpcan = ROOT.TCanvas('canv','canv',1200,1000)
+    # prongDict['mcProngs_h'].Draw()
+    # tmpcan.SaveAs(dir+"nue_mcProngs.png")
+    # prongDict['mcProngs_thresh_h'].Draw()
+    # tmpcan.SaveAs(dir+"nue_mcProngs_thresh.png")
+    # prongDict['recoProngs_h'].Draw()
+    # tmpcan.SaveAs(dir+"nue_recoProngs.png")
+    # prongDict['reco_m_mcProngs_h'].Draw()
+    # tmpcan.SaveAs(dir+"nue_reco_minus_mcProngs.png")
+    # prongDict['reco_m_mcProngs_thresh_h'].Draw()
+    # tmpcan.SaveAs(dir+"nue_reco_minus_mcProngs_thresh.png")
+    ROOT.gStyle.SetOptStat(1)
+    preText = ""
+    if mode == "MCNU_BNB":
+        preText = "bnb"
+    else:
+        preText = "nue"
+    tmpcan = ROOT.TCanvas('canv','canv',1200,1000)
+    prongDict['mcProngs_h'].Draw()
+    tmpcan.SaveAs(dir+preText+"_mcProngs.png")
+    prongDict['mcProngs_thresh_h'].Draw()
+    tmpcan.SaveAs(dir+preText+"_mcProngs_thresh.png")
+    prongDict['recoProngs_h'].Draw()
+    tmpcan.SaveAs(dir+preText+"_recoProngs.png")
+    prongDict['reco_m_mcProngs_h'].Draw()
+    tmpcan.SaveAs(dir+preText+"_reco_minus_mcProngs.png")
+    prongDict['reco_m_mcProngs_thresh_h'].Draw()
+    tmpcan.SaveAs(dir+preText+"_reco_minus_mcProngs_thresh.png")
+
+def removeDupTracks(recoTracks_v):
+    print()
+    print("Starting Number of Tracks:", len(recoTracks_v))
+    revisedTracks_v = []
+    tracksToCut = []
+    # Remove Based on Track End proximity
+    trackEnds = []
+    for idx in range(len(recoTracks_v)):
+        if idx in tracksToCut:
+            continue
+        goodTrack = True
+        endX, endY = ROOT.Double(0), ROOT.Double(0)
+        recoTracks_v[idx].GetPoint(recoTracks_v[idx].GetN()-1,endX,endY)
+        thisEnd = [endX,endY]
+        for end in trackEnds:
+            dist = ((thisEnd[0] - end[0])**2 + (thisEnd[1] - end[1])**2)**0.5
+            if dist < 8:
+                goodTrack = False
+                tracksToCut.append(idx)
+                break
+
+        if goodTrack:
+            trackEnds.append(thisEnd)
+
+    # Remove Based on Track Direction
+    trackThetas  = []
+    trackOrigIdxs= []
+    trackLengths = []
+    diffAllowance = 0.1
+    for idx in range(len(recoTracks_v)):
+        if idx in tracksToCut:
+            continue
+        goodTrack = True
+        startX, startY = ROOT.Double(0), ROOT.Double(0)
+        recoTracks_v[idx].GetPoint(0,startX,startY)
+        endX, endY = ROOT.Double(0), ROOT.Double(0)
+        recoTracks_v[idx].GetPoint(recoTracks_v[idx].GetN()-1,endX,endY)
+        dx = endX-startX
+        dy = endY-startY
+        thisTheta  = np.arctan2(dy,dx)
+        thisLength = ((dx)**2 + (dy)**2)**0.5
+        for passIdx in range(len(trackThetas)):
+            theta = trackThetas[passIdx]
+            diffTheta = abs(thisTheta - theta)
+            if diffTheta < diffAllowance or diffTheta > 2*np.pi - diffAllowance:
+                goodTrack = False
+                if thisLength < trackLengths[passIdx]:
+                    # Track that was stored is longer (better) keep that one
+                    tracksToCut.append(idx)
+                    break
+                else:
+                    # This track is longer, keep it, remove prev stored.
+                    tracksToCut.append(trackOrigIdxs[passIdx])
+                    # Swap stored info in lists
+                    trackThetas[passIdx]   = thisTheta
+                    trackOrigIdxs[passIdx] = idx
+                    trackLengths[passIdx]  = thisLength
+
+
+
+        if goodTrack:
+            trackThetas.append(thisTheta)
+            trackOrigIdxs.append(idx)
+            trackLengths.append(thisLength)
+
+
+    #Add good Tracks:
+    for idx in range(len(recoTracks_v)):
+        if idx not in tracksToCut:
+            revisedTracks_v.append(recoTracks_v[idx])
+    print("Ending Number of Tracks:", len(revisedTracks_v))
+    print()
+    return revisedTracks_v

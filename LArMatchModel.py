@@ -84,7 +84,7 @@ class LArMatchConvNet:
         sys.stdout.flush()
         print("Loaded and Initialized MODEL")
 
-    def get_larmatch_features(self, entry):
+    def get_larmatch_features3D(self, entry):
 
         ############################
         # Entry loop was here:
@@ -105,8 +105,126 @@ class LArMatchConvNet:
         ev_adc = self.iomanager.get_data(larcv.kProductImage2D, self.adc_producer)
         adc_v = ev_adc.Image2DArray()
         ev_badch    = self.iomanager.get_data(larcv.kProductChStatus, self.chstatus_producer)
-        print("SKIPPING LARMATCHFEATGRAB")
-        return np.zeros((3456, 1008, 16)), ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # print("SKIPPING LARMATCHFEATGRAB")
+        # return np.zeros((3456, 1008, 17)),np.zeros((3456, 1008, 17)),np.zeros((3456, 1008, 17)), ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()
+
+
+
+        if self.has_wirecell:
+            # make wirecell masked image
+            # print("making wirecell masked image")
+            ev_wcthrumu = self.iomanager.get_data(larcv.kProductImage2D,"thrumu")
+            ev_wcwire   = self.iomanager.get_data(larcv.kProductImage2D,"wirewc")
+            for p in range(adc_v.size()):
+                adc = larcv.Image2D(adc_v[p]) # a copy
+                np_adc = larcv.as_ndarray(adc)
+                np_wc  = larcv.as_ndarray(ev_wcthrumu.Image2DArray()[p])
+                np_adc[ np_wc>0.0 ] = 0.0
+                masked = larcv.as_image2d_meta( np_adc, adc.meta() )
+                ev_wcwire.Append(masked)
+            adc_v = ev_wcwire.Image2DArray()
+
+        badch_v = self.badchmaker.makeBadChImage( 4, 3, 2400, 6*1008, 3456, 6, 1, ev_badch )
+        # print("Number of badcv images: ",badch_v.size())
+        gapch_v = self.badchmaker.findMissingBadChs( adc_v, badch_v, 10.0, 100 )
+        for p in range(badch_v.size()):
+            for c in range(badch_v[p].meta().cols()):
+                if ( gapch_v[p].pixel(0,c)>0 ):
+                    badch_v[p].paint_col(c,255);
+        # print( "Made EVENT Gap Channel Image: ",gapch_v.front().meta().dump())
+
+        # run the larflow match prep classes
+        self.preplarmatch.process( adc_v, badch_v, 10.0, False )
+
+        # Prep sparse ADC numpy arrays
+        sparse_np_v = [ self.preplarmatch.make_sparse_image(p) for p in range(3) ]
+        coord_t = [ torch.from_numpy( sparse_np_v[p][:,0:2].astype(np.long) ).to(self.params['DEVICE']) for p in range(3) ]
+        feat_t  = [ torch.from_numpy( sparse_np_v[p][:,2].reshape(  (coord_t[p].shape[0], 1) ) ).to(self.params['DEVICE']) for p in range(3) ]
+
+        # sparse_np_v = [ self.preplarmatch.make_sparse_image(p) for p in range(2,3) ]
+        # coord_t = [ torch.from_numpy( sparse_np_v[p][:,0:2].astype(np.long) ).to(self.params['DEVICE']) for p in range(0,1) ]
+        # feat_t  = [ torch.from_numpy( sparse_np_v[p][:,2].reshape(  (coord_t[p].shape[0], 1) ) ).to(self.params['DEVICE']) for p in range(0,1) ]
+
+
+        with torch.no_grad():
+            outfeat_u, outfeat_v, outfeat_y = self.model.forward_features_joshhack( coord_t[0], feat_t[0],
+                                                                           coord_t[1], feat_t[1],
+                                                                           coord_t[2], feat_t[2],
+                                                                           1, verbose=False )
+
+        # Take output tensor and make it a dense numpy array
+        detach_outfeat_u = outfeat_u.cpu().detach().numpy()
+        print(detach_outfeat_u.shape, outfeat_u.shape)
+        detach_outfeat_u = np.reshape(detach_outfeat_u,(outfeat_u.shape[1],outfeat_u.shape[2],outfeat_u.shape[3]))
+        detach_outfeat_u_transposed = np.transpose(detach_outfeat_u,(2,1,0))
+        #slice away the padded extra pixels larmatchnet uses
+        detach_outfeat_u_transposed = detach_outfeat_u_transposed[:,0:1008,:]
+
+        # Take output tensor and make it a dense numpy array
+        detach_outfeat_v = outfeat_v.cpu().detach().numpy()
+        detach_outfeat_v = np.reshape(detach_outfeat_v,(outfeat_v.shape[1],outfeat_v.shape[2],outfeat_v.shape[3]))
+        detach_outfeat_v_transposed = np.transpose(detach_outfeat_v,(2,1,0))
+        #slice away the padded extra pixels larmatchnet uses
+        detach_outfeat_v_transposed = detach_outfeat_v_transposed[:,0:1008,:]
+
+        # Take output tensor and make it a dense numpy array
+        detach_outfeat_y = outfeat_y.cpu().detach().numpy()
+        detach_outfeat_y = np.reshape(detach_outfeat_y,(outfeat_y.shape[1],outfeat_y.shape[2],outfeat_y.shape[3]))
+        detach_outfeat_y_transposed = np.transpose(detach_outfeat_y,(2,1,0))
+        #slice away the padded extra pixels larmatchnet uses
+        detach_outfeat_y_transposed = detach_outfeat_y_transposed[:,0:1008,:]
+
+        # Concatenate the Wire Image to the larmatch features
+        u_defwire_np = np.expand_dims(larcv.as_ndarray(adc_v[0]),axis=2)
+        v_defwire_np = np.expand_dims(larcv.as_ndarray(adc_v[1]),axis=2)
+        y_defwire_np = np.expand_dims(larcv.as_ndarray(adc_v[2]),axis=2)
+        threshADC = 100
+        upperVal  = 110
+        u_defwire_np[u_defwire_np > threshADC] = upperVal
+        v_defwire_np[v_defwire_np > threshADC] = upperVal
+        y_defwire_np[y_defwire_np > threshADC] = upperVal
+
+        u_defwire_np = u_defwire_np/upperVal
+        v_defwire_np = v_defwire_np/upperVal
+        y_defwire_np = y_defwire_np/upperVal
+
+        detach_outfeat_u_transposed = np.concatenate((detach_outfeat_u_transposed,u_defwire_np),axis=2)
+        detach_outfeat_v_transposed = np.concatenate((detach_outfeat_v_transposed,v_defwire_np),axis=2)
+        detach_outfeat_y_transposed = np.concatenate((detach_outfeat_y_transposed,y_defwire_np),axis=2)
+
+        print("\n\n\n\nLArMatch Done\n")
+        print(time.time() - t_start_larmatch, "Seconds for LArMatch\n\n\n\n")
+        return detach_outfeat_u_transposed, detach_outfeat_v_transposed, detach_outfeat_y_transposed, ev_adc.run(), ev_adc.subrun(), ev_adc.event(), adc_v[2].meta()
+
+
+
+    def get_larmatch_features2D(self, entry):
+
+        ############################
+        # Entry loop was here:
+        ############################
+        if (entry > self.nentries) or ( entry < 0 ):
+            print("ERROR, entry outside file size", entry, self.nentries)
+            return -1
+
+        t_start_larmatch = time.time()
+
+        self.iomanager.read_entry(entry)
+
+        print("==========================================")
+        print("LArMatch ConvNet on Entry {}\n\n\n\n\n\n\n".format(entry))
+
+        # clear the hit maker
+        self.hitmaker.clear();
+        ev_adc = self.iomanager.get_data(larcv.kProductImage2D, self.adc_producer)
+        adc_v = ev_adc.Image2DArray()
+        ev_badch    = self.iomanager.get_data(larcv.kProductChStatus, self.chstatus_producer)
+
 
 
         if self.has_wirecell:

@@ -1288,7 +1288,7 @@ def is_inside_boundaries(xt,yt,zt,buffer = 0):
         return False
 
 
-def getprojectedpixel(meta,x,y,z):
+def getprojectedpixel(meta,x,y,z,returnAll=False):
 
     nplanes = 3
     fracpixborder = 1.5
@@ -1351,9 +1351,13 @@ def getprojectedpixel(meta,x,y,z):
     if ( y<-116.3 and z<2.0 and img_coords[1+1]==-1 ):
         img_coords[1+1] = 0;
 
-    col = img_coords[2+1]
-    row = img_coords[0]
-    return col,row
+    if returnAll:
+        # row, colu, colv, coly
+        return img_coords
+    else:
+        col = img_coords[2+1]
+        row = img_coords[0]
+        return col,row
 
 def mcstep_length(step1,step2):
     # Check both steps inside detector

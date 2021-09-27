@@ -71,8 +71,8 @@ PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
 PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
 PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
-# PARAMS['DEVICE'] = 'cuda:0'
-PARAMS['DEVICE'] = 'cpu'
+PARAMS['DEVICE'] = 'cuda:0'
+# PARAMS['DEVICE'] = 'cpu'
 PARAMS['LOAD_SIZE']  = 50
 PARAMS['TRAIN_EPOCH_SIZE'] = 500
 PARAMS['VAL_EPOCH_SIZE'] = int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
@@ -177,10 +177,10 @@ def main():
     entry_per_file = 9999
     Loader = FancyLoader3D(PARAMS)
     # iter = int(tot_entries/entry_per_file)+1
-    startEntry = 0
+    # startEntry = 1
     Loader.currentEntry = startEntry
-    endEntry = 50
-    # endEntry = Loader.nentries_ll
+    endEntry = Loader.nentries_ll
+    # endEntry = 2
     for i in range(startEntry,endEntry):
 
         loadingDict = Loader.load_fancy()

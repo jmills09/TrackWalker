@@ -38,9 +38,9 @@ class Voxelator:
 
     def getVoxelCoord(self,hit3d):
         # Takes a cartesian 3D hit and returns the 3D voxel coordinate
-        xVoxIdx = int((hit3d[0] + self.xmin) / self.voxelSize)
-        yVoxIdx = int((hit3d[1] + self.ymin) / self.voxelSize)
-        zVoxIdx = int((hit3d[2] + self.zmin) / self.voxelSize)
+        xVoxIdx = int((hit3d[0] - self.xmin) / self.voxelSize)
+        yVoxIdx = int((hit3d[1] - self.ymin) / self.voxelSize)
+        zVoxIdx = int((hit3d[2] - self.zmin) / self.voxelSize)
         # Place coord at edge of detector if outside detector
         if xVoxIdx < 0:
             xVoxIdx = 0
@@ -61,10 +61,15 @@ class Voxelator:
         # Takes a 3d voxel index and returns the center of the voxel in 3d
         # cartesian coordinates
         # 0.5 gives center of voxel
-        x = (voxel3d[0]+0.5)*self.voxelSize - self.xmin
-        y = (voxel3d[1]+0.5)*self.voxelSize - self.xmin
-        z = (voxel3d[2]+0.5)*self.voxelSize - self.xmin
+        x = (voxel3d[0]+0.5)*self.voxelSize + self.xmin
+        y = (voxel3d[1]+0.5)*self.voxelSize + self.ymin
+        z = (voxel3d[2]+0.5)*self.voxelSize + self.zmin
         return [x,y,z]
+
+    def getimgcoords(self, voxel3d):
+        # takes a 3d voxel and returns the imgcoords from getprojectedpixel
+        xyz = self.get3dCoord(voxel3d)
+
 
     def saveDetector3D(self,vox3d_v):
         # Takes a list of voxels and puts them in a th3d

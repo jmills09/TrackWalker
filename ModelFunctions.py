@@ -110,9 +110,8 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
                 np_targ = None
                 np_pred_endpt = None
                 if PARAMS['AREA_TARGET']:
-                    np_pred_scores = next_steps_pred_scores.cpu().detach().numpy()
-                    npts = np_pred_scores.shape[0]
-                    np_pred = np_pred_scores.reshape(npts,PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1)
+                    npts = next_steps_pred_scores.cpu().detach().numpy().shape[0]
+                    np_pred = next_steps_pred_scores.cpu().detach().numpy().reshape(npts,PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'])
                     np_targ = targets_onept.cpu().detach().numpy()
                     np_pred_endpt = np.argmax(endpoint_scores.cpu().detach().numpy(),axis=1)
                 elif PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:

@@ -40,31 +40,24 @@ PARAMS['RAND_FLIP_INPUT'] = False
 PARAMS['MIN_TRACK_LENGTH'] = 3.0
 PARAMS['HIDDEN_DIM'] =1024
 PARAMS['PADDING'] = 10
+PARAMS['VOXCUBESIDE'] = 3
 PARAMS['APPEND_WIREIM'] = True
+PARAMS['NDIMENSIONS'] = 3 #Not configured to have 3 yet.
 
-PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1) # N_Features
-if PARAMS['USE_CONV_IM']:
-    if PARAMS['APPEND_WIREIM']:
-        PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*17 # 16 Features per pixel in larmatch plus wireim
-    else:
-        PARAMS['EMBEDDING_DIM'] = PARAMS['EMBEDDING_DIM']*16 # 16 Features per pixel in larmatch
-PARAMS['NUM_CLASSES'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)+1 # Bonus Class is for the end of track class
-PARAMS['TRACKEND_CLASS'] = (PARAMS['PADDING']*2+1)**2
+PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)*17*3 # N_Features*3planes
 PARAMS['CENTERPOINT_ISEND'] = True
-if PARAMS['CENTERPOINT_ISEND']:
-     PARAMS['NUM_CLASSES'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1) #No bonus end of track class
-     PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
+PARAMS['NUM_CLASSES'] = PARAMS['VOXCUBESIDE']**3
+PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
 # PARAMS['INFILE'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/Reformat_LArMatch_Pad_010.root"
-PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_50Entries.root"
-PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_50Entries.root"
+PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_Complete.root"
+PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_Complete.root"
 
 # PARAMS['TRACK_IDX'] =0
 # PARAMS['EVENT_IDX'] =0
 PARAMS['ALWAYS_EDGE'] = True # True points are always placed at the edge of the Padded Box
 PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] =True # True -> Predict Output Pixel to step to, False -> Predict X,Y shift to next point
-PARAMS['NDIMENSIONS'] = 3 #Not configured to have 3 yet.
 
 PARAMS['DO_TENSORLOG'] = True
 PARAMS['TENSORDIR']  = None # Default runs/DATE_TIME Deprecated
@@ -83,13 +76,14 @@ PARAMS['DEVICE'] = 'cuda:3'
 PARAMS['LOAD_SIZE']  = 100 #Number of Entries to Load training tracks from
 PARAMS['TRAIN_EPOCH_SIZE'] = -1 #500 # Number of Training Tracks to use (load )
 PARAMS['VAL_EPOCH_SIZE'] = -1 #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
-PARAMS['VAL_SAMPLE_SIZE'] = 500
+PARAMS['VAL_SAMPLE_SIZE'] = 1
 
 PARAMS['SHUFFLE_DATASET'] = False
 PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
 PARAMS['AREA_TARGET'] = True   # Change network to be predicting
 PARAMS['TARGET_BUFFER'] = 2
-PARAMS['DO_CROPSHIFT'] = True
+PARAMS['DO_CROPSHIFT'] = False
+PARAMS['CROPSHIFT_MAXAMT'] = 2
 
 PARAMS['LEARNING_RATES'] = [(0, 0.001), (10000, 0.0001), (100000, 1e-05), (1000000, 1e-06)] #(Step, New LR), place steps in order.
 PARAMS['NEXTSTEP_LOSS_WEIGHT'] = 20.0
@@ -226,7 +220,7 @@ def main():
                 np_pred_endpt = None
                 if PARAMS['AREA_TARGET']:
                     npts = next_steps_pred_scores.cpu().detach().numpy().shape[0]
-                    np_pred = next_steps_pred_scores.cpu().detach().numpy().reshape(npts,PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1)
+                    np_pred = next_steps_pred_scores.cpu().detach().numpy().reshape(npts,PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'])
                     np_targ = targets_onept.cpu().detach().numpy()
                     np_pred_endpt = np.argmax(endpoint_scores.cpu().detach().numpy(),axis=1)
                 elif PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
@@ -237,15 +231,21 @@ def main():
                     np_targ = targets_onept.cpu().detach().numpy()
 
                 # loss_weights = torch.tensor(get_loss_weights_v2(targets_next_step_area.cpu().detach().numpy(),np_pred,PARAMS),dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
-
+                # print("Pred Targ")
+                # print(np_pred)
+                # print()
+                # print(targets_next_step_area)
+                # print()
                 loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_next_step_area)
                 vals_per_step = loss_next_steps.shape[1]
                 loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
                 loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
                 loss_total = loss_next_steps_per_step + loss_endpoint
+                print(loss_total)
                 loss_total.backward()
                 optimizer.step()
                 np_idx_v = make_prediction_vector(PARAMS, np_pred)
+
                 for ixx in range(np_idx_v.shape[0]):
                     pred_x, pred_y = unflatten_pos(np_idx_v[ixx], PARAMS['PADDING']*2+1)
                     pred_h.Fill(pred_x,pred_y)
@@ -255,6 +255,7 @@ def main():
                 if PARAMS['SAVE_MODEL'] and step_counter%PARAMS['CHECKPOINT_EVERY_N_TRACKS'] == 0:
                     print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
                     torch.save(model.state_dict(), writer_dir+"TrackerCheckPoint_"+str(epoch)+"_"+str(step_counter)+".pt")
+
                 if PARAMS['DO_TENSORLOG']:
                     calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_EPOCH_SIZE'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                     if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:

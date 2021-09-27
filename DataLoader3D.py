@@ -7,7 +7,7 @@ from larlite import larutil
 from ublarcvapp import ublarcvapp
 from MiscFunctions import cropped_np, unravel_array, reravel_array, paste_target
 from MiscFunctions import unflatten_pos, flatten_pos, make_steps_images
-from LArMatchModel import LArMatchConvNet
+from VoxelFunctions import Voxelator
 
 
 def unstack(a, axis = 0):
@@ -16,6 +16,7 @@ def unstack(a, axis = 0):
 class DataLoader3D:
     def __init__(self, PARAMS, verbose=False, all_train = False, all_valid = False):
         self.PARAMS = PARAMS
+        self.voxelator = Voxelator(self.PARAMS)
         self.verbose = verbose
         self.infile = None
         if all_train:
@@ -77,24 +78,21 @@ class DataLoader3D:
             # print("Doing Track ",i)
             self.intree.GetEntry(i)
             # print("Loaded Train",i)
+            # np array of x,y,z,StepIDX in full detector voxel coord
+            voxelsteps_np       = self.intree.voxelsteps_np.tonumpy().copy()
+            # Min Row, Min Cols for the feature images (to offset vox projection)
+            originInFullImg_np       = self.intree.originInFullImg_np.tonumpy().copy()
 
-            stepidx_im_np       = self.intree.stepidx_image_np.tonumpy().copy()
             # if there is only 1 or fewer points on the index map then dont include track
-            if len(np.where(stepidx_im_np > 0)[0]) <= 1 or np.amax(stepidx_im_np) == 0:
+            if voxelsteps_np.shape[0] < 2:
                 continue
-            larmatchfeat_im_np  = self.intree.larmatchfeat_image_np.tonumpy().copy()
-            wire_im_np          = self.intree.wire_image_np.tonumpy().copy()
-            wire_im_np          = np.expand_dims(wire_im_np,axis=2)
-
-
-
-            if self.PARAMS['APPEND_WIREIM']:
-                larmatchfeat_im_np = np.concatenate((larmatchfeat_im_np,wire_im_np),axis=2)
-
+            feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
+            feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
+            feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
 
 
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
-                make_track_crops(larmatchfeat_im_np, stepidx_im_np, self.PARAMS)
+                self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
             # rerav = []
             # for ar in flat_area_positions:
             #     rerav.append(reravel_array(ar,2*self.PARAMS['PADDING']+1,2*self.PARAMS['PADDING']+1))
@@ -154,19 +152,21 @@ class DataLoader3D:
 
             self.intree.GetEntry(i)
             # print("Loaded Val",i)
+            # np array of x,y,z,StepIDX in full detector voxel coord
+            voxelsteps_np       = self.intree.voxelsteps_np.tonumpy().copy()
+            # Min Row, Min Cols for the feature images (to offset vox projection)
+            originInFullImg_np       = self.intree.originInFullImg_np.tonumpy().copy()
 
-            stepidx_im_np       = self.intree.stepidx_image_np.tonumpy().copy()
-            if len(np.where(stepidx_im_np > 0)[0]) <= 1 or np.amax(stepidx_im_np) == 0:
+            # if there is only 1 or fewer points on the index map then dont include track
+            if voxelsteps_np.shape[0] < 2:
                 continue
-            larmatchfeat_im_np  = self.intree.larmatchfeat_image_np.tonumpy().copy()
-            wire_im_np          = self.intree.wire_image_np.tonumpy().copy()
-            wire_im_np          = np.expand_dims(wire_im_np,axis=2)
+            feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
+            feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
+            feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
 
-            if self.PARAMS['APPEND_WIREIM']:
-                larmatchfeat_im_np = np.concatenate((larmatchfeat_im_np,wire_im_np),axis=2)
 
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
-                make_track_crops(larmatchfeat_im_np, stepidx_im_np, self.PARAMS)
+                self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
 
             if self.RAND_FLIP_INPUTS:
                 print("Random flipping of images not implemented for complex dataloading")
@@ -179,51 +179,83 @@ class DataLoader3D:
             self.current_val_entry = 0
         return val_data
 
-def make_track_crops(feat_im_np, stepidx_im_np, PARAMS):
-    feat_steps_np_v = []
-    flattened_positions_v  = []
-    area_positions_v  = []
-    # print("Making Steps")
-    # print(feat_im_np.shape)
-    # print(stepidx_im_np.shape)
-    nSteps = 0
-    # for y in range(stepidx_im_np.shape[1]):
-    #     for x in range(stepidx_im_np.shape[0]):
-    #         print(stepidx_im_np[x,stepidx_im_np.shape[1]-1-y],end=" , ")
-    #     print()
-    nextfullimPosition  = np.where(stepidx_im_np == np.ma.masked_equal(stepidx_im_np, 0.0, copy=False).min())
-    endPosition         = np.where(stepidx_im_np == np.amax(stepidx_im_np))
-    lastPosition = -1
-    # print()
-    # print(nextfullimPosition)
-    # print()
-    endIdx   = np.amax(feat_im_np)
-    isFinished = False
-    while lastPosition != nextfullimPosition:
-        lowx  = nextfullimPosition[0][0]-PARAMS['PADDING']
-        highx = nextfullimPosition[0][0]+PARAMS['PADDING']+1
-        lowy  = nextfullimPosition[1][0]-PARAMS['PADDING']
-        highy = nextfullimPosition[1][0]+PARAMS['PADDING']+1
 
-        if PARAMS['DO_CROPSHIFT']:
-            delta_x = np.random.randint(-2,3)
-            delta_y = np.random.randint(-2,3)
-            lowx  += delta_x
-            highx += delta_x
-            lowy  += delta_y
-            highy += delta_y
-        feat_crop    = feat_im_np[lowx:highx, lowy:highy,:]
-        stepidx_crop = stepidx_im_np[lowx:highx, lowy:highy]
-        lastPosition = nextfullimPosition
-        nextfullimPosition  = np.where(stepidx_im_np == np.amax(stepidx_crop))
-        nextcropimPosition  = np.where(stepidx_crop == np.amax(stepidx_crop))
-        feat_steps_np_v.append(feat_crop)
-        flattened_positions_v.append(nextcropimPosition[0][0]*stepidx_crop.shape[0]+nextcropimPosition[1][0])
-        if PARAMS['AREA_TARGET']:
-            zeros_np = np.zeros(stepidx_crop.shape)
-            area_positions_v.append(unravel_array(paste_target(zeros_np,nextcropimPosition[0][0],nextcropimPosition[1][0],PARAMS['TARGET_BUFFER'])))
 
-    return feat_steps_np_v, flattened_positions_v, area_positions_v
+    def make_track_crops(self, feat_im_v, voxelsteps_np, originInFullImg_np, PARAMS):
+        feat_steps_np_v = []
+        flattened_positions_v  = []
+        area_positions_v  = []
+
+        nSteps = 0
+
+        # nextfullimPosition  = np.where(stepidx_im_np == np.ma.masked_equal(stepidx_im_np, 0.0, copy=False).min())
+        # endPosition         = np.where(stepidx_im_np == np.amax(stepidx_im_np))
+        # lastPosition = -1
+
+        # nextfullvoxelPosition   = voxelsteps_np[ 0,:].copy()
+        # endPosition             = voxelsteps_np[-1,:].copy()
+
+        # print(nextfullvoxelPosition)
+        # print(endPosition)
+        # lastPosition = -1
+
+        # endIdx   = np.amax(feat_im_np)
+        # isFinished = False
+        # while nextfullimPosition != lastPosition:
+        for voxIdx in range(voxelsteps_np.shape[0]):
+            thisVoxelPosition = voxelsteps_np[voxIdx,:].copy()
+            shiftedthisVoxelPosition = thisVoxelPosition.copy()
+            if PARAMS['DO_CROPSHIFT']:
+                print("CropShifting not implemented for 3d")
+                assert 1==2
+                for i in range(3):
+                    shift_amt = PARAMS['CROPSHIFT_MAXAMT']
+                    delta = np.random.randint(-shift_amt,shift_amt+1)
+                    shiftedthisVoxelPosition[i] +=delta
+
+            # Grab Feature Images cropped around this 3d position's projections
+            pos3d = self.voxelator.get3dCoord(shiftedthisVoxelPosition)
+            imgcoords = getprojectedpixel_hardcoded(pos3d[0],pos3d[1],pos3d[2])
+            lowcoords   = [int(imgcoords[p]-originInFullImg_np[p]-PARAMS['PADDING']) for p in range(4)]
+            highcoords  = [int(imgcoords[p]-originInFullImg_np[p]+PARAMS['PADDING']+1) for p in range(4)]
+
+            feat_crops_np    = [feat_im_v[p][lowcoords[p+1]:highcoords[p+1], lowcoords[0]:highcoords[0],:].copy() for p in range(3)]
+
+            feat_crops_np = np.stack(feat_crops_np,axis=0)
+
+
+
+
+            feat_steps_np_v.append(feat_crops_np)
+            if voxIdx == voxelsteps_np.shape[0] - 1:
+                flatPosition = self.getNextStepClass(None, dim=PARAMS['VOXCUBESIDE'], isEndpoint=True)
+                flattened_positions_v.append(flatPosition)
+                if PARAMS['AREA_TARGET']:
+                    zeros_np = np.zeros((PARAMS['VOXCUBESIDE']**3))
+                    zeros_np[flatPosition] = 1
+                    area_positions_v.append(zeros_np)
+            else:
+                diffVox = voxelsteps_np[voxIdx+1,:].copy() - shiftedthisVoxelPosition + 1 #(Shift to all position vals)
+                flatPosition = self.getNextStepClass(diffVox, dim=PARAMS['VOXCUBESIDE'])
+                flattened_positions_v.append(flatPosition)
+                if PARAMS['AREA_TARGET']:
+                    zeros_np = np.zeros((PARAMS['VOXCUBESIDE']**3))
+                    zeros_np[flatPosition] = 1
+                    area_positions_v.append(zeros_np)
+            # if PARAMS['AREA_TARGET']:
+                # zeros_np = np.zeros(stepidx_crop.shape)
+                # area_positions_v.append(unravel_array(paste_target(zeros_np,nextcropimPosition[0][0],nextcropimPosition[1][0],PARAMS['TARGET_BUFFER'])))
+
+        return feat_steps_np_v, flattened_positions_v, area_positions_v
+
+    def getNextStepClass(self, nextStepIdx_v, dim, isEndpoint=False ):
+        if isEndpoint == True:
+            val = int((dim-1)/2)
+            return int(val*dim*dim + val*dim + val) #13, refers to center of cube for endpoint
+        else:
+            classVal = nextStepIdx_v[0]*dim*dim + nextStepIdx_v[1]*dim + nextStepIdx_v[2]
+            return int(classVal)
+
 
 
 
@@ -246,3 +278,98 @@ def flip_flat_area_positions_xdim(in_flat_area_positions, PARAMS):
             flat_flip_area = area_position_2d.flatten()
             out_flat_area_positions.append(flat_flip_area)
         return out_flat_area_positions
+
+def row_get(y, origin_y, origin_y_plus_height, pixel_height):
+    if ((y < origin_y) or (y >= origin_y_plus_height)):
+        print("Row out of range", y, origin_y, origin_y_plus_height)
+        assert 1==2
+    else:
+        return int((y-origin_y)/pixel_height)
+
+def col_get(x, origin_x, origin_x_plus_width, pixel_width):
+    if ((x < origin_x) or (x >= origin_x_plus_width)):
+        print("Row out of range", x, origin_x, origin_x_plus_width)
+        assert 1==2
+    else:
+        return int((x-origin_x)/pixel_width)
+
+def getprojectedpixel_hardcoded(x,y,z):
+
+    nplanes = 3
+    fracpixborder = 1.5
+    pixel_height = 6.0
+    pixel_width  = 1.0
+    DriftVelocity = 0.1098
+    SamplingRate = 500.0
+    min_y        = 2400.0
+    max_y        = 8448.0
+    rows         = 1008
+    origin_y     = 2400.0
+    origin_y_plus_height = 8448.0
+    min_x = 0.0
+    max_x = 3456.0
+    origin_x = 0.0
+    origin_x_plus_width = 3456.0
+    cols  = 3456
+
+    row_border = fracpixborder*pixel_height;
+    col_border = fracpixborder*pixel_width;
+
+    img_coords = [-1,-1,-1,-1]
+    tick = x/(DriftVelocity*SamplingRate*1.0e-3) + 3200.0;
+    if ( tick < min_y ):
+        if ( tick > min_y- row_border ):
+            # below min_y-border, out of image
+            img_coords[0] = rows-1 # note that tick axis and row indicies are in inverse order (same order in larcv2)
+        else:
+            # outside of image and border
+            img_coords[0] = -1
+    elif ( tick > max_y ):
+        if (tick < max_y+row_border):
+            # within upper border
+            img_coords[0] = 0;
+        else:
+            # outside of image and border
+            img_coords[0] = -1;
+
+    else:
+        # within the image
+        img_coords[0] = col_get(tick,origin_y,origin_y_plus_height,pixel_height);
+
+
+    # Columns
+    # xyz = [ x, y, z ]
+    xyz = array('d', [x,y,z])
+
+    # there is a corner where the V plane wire number causes an error
+    if ( (y>-117.0 and y<-116.0) and z<2.0 ):
+        xyz[1] = -116.0;
+
+    for p in range(nplanes):
+        wire = larutil.Geometry.GetME().WireCoordinate( xyz, p );
+
+        # get image coordinates
+        if ( wire<min_x ):
+            if ( wire>min_x-col_border ):
+                # within lower border
+                img_coords[p+1] = 0;
+            else:
+                img_coords[p+1] = -1;
+        elif ( wire>=max_x ):
+            if ( wire<max_x+col_border ):
+                # within border
+                img_coords[p+1] = cols-1
+            else:
+                # outside border
+                img_coords[p+1] = -1
+        else:
+        # inside image
+            img_coords[p+1] = col_get(wire,origin_x,origin_x_plus_width,pixel_width) #meta.col( wire );
+        # end of plane loop
+
+    # there is a corner where the V plane wire number causes an error
+    if ( y<-116.3 and z<2.0 and img_coords[1+1]==-1 ):
+        img_coords[1+1] = 0;
+
+
+    return img_coords

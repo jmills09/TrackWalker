@@ -703,6 +703,9 @@ def enablePrint():
     sys.stdout = sys.__stdout__
     sys.stdout = sys.__stderr__
 
+def ignoreROOT():
+    ROOT.gROOT.ProcessLine("gErrorIgnoreLevel = 1001;")
+
 def getProngDict():
     mcProngs_h = ROOT.TH1D("mcProngs_h", "mcProngs_h",10,0.,10.)
     mcProngs_h.SetTitle("mcProngs")

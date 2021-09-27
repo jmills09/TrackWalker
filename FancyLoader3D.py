@@ -82,16 +82,19 @@ class FancyLoader3D():
         event     = -1
 
         u_feat_np, v_feat_np, y_feat_np, run, subrun, event, meta = self.LArMatchNet.get_larmatch_features3D(self.currentEntry)
-
+        self.meta = meta
         ev_ancestor    = self.iocv.get_data(larcv.kProductImage2D,"ancestor")
         anc_v = ev_ancestor.Image2DArray()
 
         print("Number of Tracks", len(ev_mctrack))
         #Note this is more than all the steps in mctrack, we will interpolate voxels between steps
         # Formatted as x,y,z,stepIdx (voxel coord)
-        voxSteps_v = []
         for mctk_idx in range(0,len(ev_mctrack)):
             print("  TrackNum",mctk_idx)
+            # if mctk_idx != 1:
+            #     continue
+            voxSteps_v = []
+
             mctrack = ev_mctrack[mctk_idx]
             this_pdg = mctrack.PdgCode()
             if this_pdg not in self.PDG_to_Part or self.PDG_to_Part[this_pdg] not in ["PROTON","MUON","PIPLUS","PIMINUS","PI0"]:
@@ -124,7 +127,8 @@ class FancyLoader3D():
                     continue
                 # Add Previous Step
                 # Fill in steps between [last,this) (inclusive, not inclusive)
-                self.addInterpolatedSteps(voxSteps_v, last_x, last_y, last_z, this_x, this_y, this_z)
+
+                self.addInterpolatedSteps(voxSteps_v, last_x, last_y, last_z, this_x, this_y, this_z,minImgCoords,maxImgCoords)
 
             # Add last step point
             if not (vox3d_v[-1][0] == vox3d_v[-2][0] and vox3d_v[-1][1] == vox3d_v[-2][1] and vox3d_v[-1][2] == vox3d_v[-2][2]):
@@ -135,7 +139,10 @@ class FancyLoader3D():
             # This function crops the features and ancestor image, as well as
             feats_np_v = [u_feat_np, v_feat_np, y_feat_np]
             anc_np_v   = [larcv.as_ndarray(anc_v[0]), larcv.as_ndarray(anc_v[1]), larcv.as_ndarray(anc_v[2])]
-            cropped_feats_np_v, cropped_anc_np_v = self.cropTrack(feats_np_v, anc_np_v, minImgCoords, maxImgCoords)
+            # This modifies the minImgCoords to adjust them to the crop
+            cropped_feats_np_v, cropped_anc_np_v, newminImgCoords, newmaxImgCoords = self.cropTrack(feats_np_v, anc_np_v, minImgCoords, maxImgCoords)
+            minImgCoords = newminImgCoords
+            maxImgCoords = newmaxImgCoords
 
             # tmp_wire_np = np.copy(cropped_track_wire_np)
             # tmp_anc_np     = np.copy(cropped_anc_np)
@@ -155,6 +162,14 @@ class FancyLoader3D():
                 voxSteps_np_v[idxx,1] = voxSteps_v[idxx][1]
                 voxSteps_np_v[idxx,2] = voxSteps_v[idxx][2]
                 voxSteps_np_v[idxx,3] = voxSteps_v[idxx][3]
+
+            # if mctk_idx == 1:
+            #     print("Printing 3D Points")
+            #     print(len(voxSteps_v))
+            #     for idxx in range(len(voxSteps_v)):
+            #         coord3D = self.voxelator.get3dCoord([voxSteps_np_v[idxx,0],voxSteps_np_v[idxx,1],voxSteps_np_v[idxx,2], len(voxSteps_v)+1])
+            #         imgcoords = getprojectedpixel(self.meta,coord3D[0],coord3D[1],coord3D[2], returnAll=True)
+            #         print(imgcoords)
 
             minImgCoords_np = np.array(minImgCoords.copy())
             features_image_vv.append(cropped_feats_np_v.copy())
@@ -219,7 +234,7 @@ class FancyLoader3D():
 
         return pos3d_v, vox3d_v, minImgCoords, maxImgCoords
 
-    def addInterpolatedSteps(self, voxSteps_v, last_x, last_y, last_z, this_x, this_y, this_z):
+    def addInterpolatedSteps(self, voxSteps_v, last_x, last_y, last_z, this_x, this_y, this_z,minImgCoords,maxImgCoords):
         # This is complicated, we're going to interpolate steps between last and this
         # In order to do this we need to move in the fastest changing direction primarily
         # then the medium changing direction, then the slowest change direction
@@ -233,11 +248,15 @@ class FancyLoader3D():
         deltasAbs = [abs(dx),abs(dy),abs(dz)]
         idxAvail = [0,1,2]
         # Get Order of Fastest changing directions
-        fastestChanging = deltasAbs.index(max(deltasAbs))
-        slowestChanging = deltasAbs.index(min(deltasAbs))
-        idxAvail.pop(idxAvail.index(fastestChanging))
-        idxAvail.pop(idxAvail.index(slowestChanging))
-        mediumChanging = idxAvail[0]
+        fastestChanging = 0
+        mediumChanging  = 1
+        slowestChanging = 2
+        if max(deltasAbs) != min(deltasAbs):
+            fastestChanging = deltasAbs.index(max(deltasAbs))
+            slowestChanging = deltasAbs.index(min(deltasAbs))
+            idxAvail.pop(idxAvail.index(fastestChanging))
+            idxAvail.pop(idxAvail.index(slowestChanging))
+            mediumChanging = idxAvail[0]
 
         dxChangeIdx, dyChangeIdx, dzChangeIdx = self.getChangeIdxs(fastestChanging, mediumChanging, slowestChanging)
         dFastest = deltas[fastestChanging]
@@ -288,6 +307,9 @@ class FancyLoader3D():
     def cropTrack(self, feats_np_v, anc_np_v, minImgCoords, maxImgCoords):
         cropped_feats_np_v = []
         cropped_anc_np_v = []
+        newminImgCoords = [0,0,0,0]
+        newmaxImgCoords = [0,0,0,0]
+
         for p in range(3):
             coldim = maxImgCoords[p+1] - minImgCoords[p+1] + 40
             rowdim = maxImgCoords[0] - minImgCoords[0] + 40
@@ -305,6 +327,7 @@ class FancyLoader3D():
             offlowy = 0
             offhighy = 0
 
+
             if fromx < 0:
                 offlowx = 0 - fromx
                 fromx = 0
@@ -318,9 +341,21 @@ class FancyLoader3D():
                 offhighy = feats_np_v[0].shape[1] - toy
                 toy = feats_np_v[0].shape[1]
 
+            newminImgCoords[p+1] = fromx
+            newmaxImgCoords[p+1] = tox
+            newminImgCoords[0]   = fromy
+            newmaxImgCoords[0]   = toy
             cropped_larfeat_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]    = feats_np_v[p][fromx:tox,fromy:toy].copy()
             cropped_anc_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]        = anc_np_v[p][fromx:tox,fromy:toy].copy()
+            if cropped_larfeat_np.shape[0] == 45:
+
+                print()
+                print(cropped_larfeat_np.shape, "Shape of Larfeat Crop")
+                print(fromx,tox, "Desired XRange")
+                print(fromy,toy, "Desired YRange")
+                print(minImgCoords[2], maxImgCoords[2], "XRange Calc")
+                print(feats_np_v[1].shape, "Shape Before Cropping")
             cropped_feats_np_v.append(cropped_larfeat_np)
             cropped_anc_np_v.append(cropped_anc_np)
 
-        return cropped_feats_np_v, cropped_anc_np_v
+        return cropped_feats_np_v, cropped_anc_np_v, newminImgCoords, newmaxImgCoords

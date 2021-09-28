@@ -90,7 +90,6 @@ class DataLoader3D:
             feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
             feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
 
-
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
                 self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
             # rerav = []
@@ -164,7 +163,6 @@ class DataLoader3D:
             feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
             feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
 
-
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
                 self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
 
@@ -221,8 +219,17 @@ class DataLoader3D:
 
             feat_crops_np    = [feat_im_v[p][lowcoords[p+1]:highcoords[p+1], lowcoords[0]:highcoords[0],:].copy() for p in range(3)]
 
-            feat_crops_np = np.stack(feat_crops_np,axis=0)
-
+            try:
+                feat_crops_np = np.stack(feat_crops_np,axis=0)
+            except:
+                print()
+                print("Failed!")
+                print(originInFullImg_np, "originInFullImg_np")
+                print(imgcoords, "imgcoords")
+                print(lowcoords[3],highcoords[3], "Desired XRange")
+                for p in range(3):
+                    print(feat_crops_np[p].shape)
+                assert 1==2
 
 
 

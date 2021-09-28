@@ -163,13 +163,16 @@ class FancyLoader3D():
                 voxSteps_np_v[idxx,2] = voxSteps_v[idxx][2]
                 voxSteps_np_v[idxx,3] = voxSteps_v[idxx][3]
 
-            # if mctk_idx == 1:
-            #     print("Printing 3D Points")
-            #     print(len(voxSteps_v))
-            #     for idxx in range(len(voxSteps_v)):
-            #         coord3D = self.voxelator.get3dCoord([voxSteps_np_v[idxx,0],voxSteps_np_v[idxx,1],voxSteps_np_v[idxx,2], len(voxSteps_v)+1])
-            #         imgcoords = getprojectedpixel(self.meta,coord3D[0],coord3D[1],coord3D[2], returnAll=True)
-            #         print(imgcoords)
+
+
+            # print("Printing 3D Points")
+            # print(minImgCoords)
+            # print(maxImgCoords)
+            # print(len(voxSteps_v))
+            # for idxx in range(len(voxSteps_v)):
+            #     coord3D = self.voxelator.get3dCoord([voxSteps_np_v[idxx,0],voxSteps_np_v[idxx,1],voxSteps_np_v[idxx,2], len(voxSteps_v)+1])
+            #     imgcoords = getprojectedpixel(self.meta,coord3D[0],coord3D[1],coord3D[2], returnAll=True)
+            #     print(imgcoords)
 
             minImgCoords_np = np.array(minImgCoords.copy())
             features_image_vv.append(cropped_feats_np_v.copy())
@@ -327,6 +330,11 @@ class FancyLoader3D():
             offlowy = 0
             offhighy = 0
 
+            newminImgCoords[p+1] = fromx
+            newmaxImgCoords[p+1] = tox
+            newminImgCoords[0]   = fromy
+            newmaxImgCoords[0]   = toy
+
 
             if fromx < 0:
                 offlowx = 0 - fromx
@@ -341,20 +349,22 @@ class FancyLoader3D():
                 offhighy = feats_np_v[0].shape[1] - toy
                 toy = feats_np_v[0].shape[1]
 
-            newminImgCoords[p+1] = fromx
-            newmaxImgCoords[p+1] = tox
-            newminImgCoords[0]   = fromy
-            newmaxImgCoords[0]   = toy
+
             cropped_larfeat_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]    = feats_np_v[p][fromx:tox,fromy:toy].copy()
             cropped_anc_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]        = anc_np_v[p][fromx:tox,fromy:toy].copy()
-            if cropped_larfeat_np.shape[0] == 45:
 
-                print()
-                print(cropped_larfeat_np.shape, "Shape of Larfeat Crop")
-                print(fromx,tox, "Desired XRange")
-                print(fromy,toy, "Desired YRange")
-                print(minImgCoords[2], maxImgCoords[2], "XRange Calc")
-                print(feats_np_v[1].shape, "Shape Before Cropping")
+            # print()
+            # print(p)
+            # print(cropped_larfeat_np.shape, "Shape of Larfeat Crop")
+            # print(fromx,tox, "Desired XRange")
+            # print(fromy,toy, "Desired YRange")
+            # print("In New Coord")
+            # print(offlowx,coldim+offhighx)
+            # print(minImgCoords[2], maxImgCoords[2], "XRange Calc")
+            # print(feats_np_v[1].shape, "Shape Before Cropping")
+            # print()
+            # print(fromx, "fromx")
+            # print(offlowx, "offlowx")
             cropped_feats_np_v.append(cropped_larfeat_np)
             cropped_anc_np_v.append(cropped_anc_np)
 

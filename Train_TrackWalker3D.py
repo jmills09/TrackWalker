@@ -51,8 +51,8 @@ PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
 # PARAMS['INFILE'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/Reformat_LArMatch_Pad_010.root"
-PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_Complete.root"
-PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_000_Complete.root"
+PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/1/Reformat_LArMatch_ComplexTrackIdx_000.root"
+PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/1/Reformat_LArMatch_ComplexTrackIdx_000.root"
 
 # PARAMS['TRACK_IDX'] =0
 # PARAMS['EVENT_IDX'] =0
@@ -65,7 +65,7 @@ PARAMS['TWOWRITERS'] = True
 
 PARAMS['SAVE_MODEL'] = True #should the network save the model?
 PARAMS['CHECKPOINT_EVERY_N_TRACKS'] = 250000 # if not saving then this doesn't matter
-PARAMS['EPOCHS'] = 10
+PARAMS['EPOCHS'] = 100
 PARAMS['STOP_AFTER_NTRACKS'] = 999999999999999999999
 PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
 PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 1000
@@ -76,7 +76,7 @@ PARAMS['DEVICE'] = 'cuda:3'
 PARAMS['LOAD_SIZE']  = 100 #Number of Entries to Load training tracks from
 PARAMS['TRAIN_EPOCH_SIZE'] = -1 #500 # Number of Training Tracks to use (load )
 PARAMS['VAL_EPOCH_SIZE'] = -1 #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
-PARAMS['VAL_SAMPLE_SIZE'] = 1
+PARAMS['VAL_SAMPLE_SIZE'] = 28
 
 PARAMS['SHUFFLE_DATASET'] = False
 PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
@@ -247,11 +247,11 @@ def main():
                 np_idx_v = make_prediction_vector(PARAMS, np_pred)
 
                 for ixx in range(np_idx_v.shape[0]):
-                    pred_x, pred_y = unflatten_pos(np_idx_v[ixx], PARAMS['PADDING']*2+1)
-                    pred_h.Fill(pred_x,pred_y)
+                    pred_x, pred_y, pred_z = unflatten_pos(np_idx_v[ixx], PARAMS['VOXCUBESIDE'])
+                    pred_h.Fill(pred_x, pred_y, pred_z)
                 for ixx in range(np_targ.shape[0]):
-                    targ_x, targ_y = unflatten_pos(np_targ[ixx], PARAMS['PADDING']*2+1)
-                    targ_h.Fill(targ_x,targ_y)
+                    targ_x, targ_y, targ_z = unflatten_pos(np_targ[ixx], PARAMS['VOXCUBESIDE'])
+                    targ_h.Fill(targ_x,targ_y,targ_z)
                 if PARAMS['SAVE_MODEL'] and step_counter%PARAMS['CHECKPOINT_EVERY_N_TRACKS'] == 0:
                     print("CANT SAVE NEED TO SPECIFY SUBFOLDER")
                     torch.save(model.state_dict(), writer_dir+"TrackerCheckPoint_"+str(epoch)+"_"+str(step_counter)+".pt")

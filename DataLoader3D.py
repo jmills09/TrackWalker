@@ -83,12 +83,26 @@ class DataLoader3D:
             # Min Row, Min Cols for the feature images (to offset vox projection)
             originInFullImg_np       = self.intree.originInFullImg_np.tonumpy().copy()
 
+
             # if there is only 1 or fewer points on the index map then dont include track
             if voxelsteps_np.shape[0] < 2:
                 continue
-            feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
-            feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
-            feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
+            sparse_feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
+            sparse_feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
+            sparse_feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
+            feat_shapes_np             = self.intree.feat_shapes_np.tonumpy().copy()
+            # Create empty feat arrays of shapes dictated by the feat_shapes_np
+            # print(feat_shapes_np)
+            feats_u_np = np.zeros((int(feat_shapes_np[0,0]),int(feat_shapes_np[0,1]),17))
+            feats_v_np = np.zeros((int(feat_shapes_np[1,0]),int(feat_shapes_np[1,1]),17))
+            feats_y_np = np.zeros((int(feat_shapes_np[2,0]),int(feat_shapes_np[2,1]),17))
+            # Now fill from the sparse arrays:
+            # print("Sparse Feats")
+            # print(sparse_feats_u_np)
+            feats_u_np[sparse_feats_u_np[:,0].astype(np.int32),sparse_feats_u_np[:,1].astype(np.int32),sparse_feats_u_np[:,2].astype(np.int32)] = sparse_feats_u_np[:,3]
+            feats_v_np[sparse_feats_v_np[:,0].astype(np.int32),sparse_feats_v_np[:,1].astype(np.int32),sparse_feats_v_np[:,2].astype(np.int32)] = sparse_feats_v_np[:,3]
+            feats_y_np[sparse_feats_y_np[:,0].astype(np.int32),sparse_feats_y_np[:,1].astype(np.int32),sparse_feats_y_np[:,2].astype(np.int32)] = sparse_feats_y_np[:,3]
+
 
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
                 self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
@@ -159,9 +173,22 @@ class DataLoader3D:
             # if there is only 1 or fewer points on the index map then dont include track
             if voxelsteps_np.shape[0] < 2:
                 continue
-            feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
-            feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
-            feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
+            sparse_feats_u_np          = self.intree.feats_u_np.tonumpy().copy()
+            sparse_feats_v_np          = self.intree.feats_v_np.tonumpy().copy()
+            sparse_feats_y_np          = self.intree.feats_y_np.tonumpy().copy()
+            feat_shapes_np             = self.intree.feat_shapes_np.tonumpy().copy()
+            # Create empty feat arrays of shapes dictated by the feat_shapes_np
+            # print(feat_shapes_np)
+            feats_u_np = np.zeros((int(feat_shapes_np[0,0]),int(feat_shapes_np[0,1]),17))
+            feats_v_np = np.zeros((int(feat_shapes_np[1,0]),int(feat_shapes_np[1,1]),17))
+            feats_y_np = np.zeros((int(feat_shapes_np[2,0]),int(feat_shapes_np[2,1]),17))
+            # Now fill from the sparse arrays:
+            # print("Sparse Feats")
+            # print(sparse_feats_u_np)
+            feats_u_np[sparse_feats_u_np[:,0].astype(np.int32),sparse_feats_u_np[:,1].astype(np.int32),sparse_feats_u_np[:,2].astype(np.int32)] = sparse_feats_u_np[:,3]
+            feats_v_np[sparse_feats_v_np[:,0].astype(np.int32),sparse_feats_v_np[:,1].astype(np.int32),sparse_feats_v_np[:,2].astype(np.int32)] = sparse_feats_v_np[:,3]
+            feats_y_np[sparse_feats_y_np[:,0].astype(np.int32),sparse_feats_y_np[:,1].astype(np.int32),sparse_feats_y_np[:,2].astype(np.int32)] = sparse_feats_y_np[:,3]
+
 
             feature_ims_np_v, flat_next_positions, flat_area_positions = \
                 self.make_track_crops([feats_u_np,feats_v_np,feats_y_np], voxelsteps_np, originInFullImg_np, self.PARAMS)
@@ -218,20 +245,7 @@ class DataLoader3D:
             highcoords  = [int(imgcoords[p]-originInFullImg_np[p]+PARAMS['PADDING']+1) for p in range(4)]
 
             feat_crops_np    = [feat_im_v[p][lowcoords[p+1]:highcoords[p+1], lowcoords[0]:highcoords[0],:].copy() for p in range(3)]
-
-            try:
-                feat_crops_np = np.stack(feat_crops_np,axis=0)
-            except:
-                print()
-                print("Failed!")
-                print(originInFullImg_np, "originInFullImg_np")
-                print(imgcoords, "imgcoords")
-                print(lowcoords[3],highcoords[3], "Desired XRange")
-                for p in range(3):
-                    print(feat_crops_np[p].shape)
-                assert 1==2
-
-
+            feat_crops_np = np.stack(feat_crops_np,axis=0)
 
             feat_steps_np_v.append(feat_crops_np)
             if voxIdx == voxelsteps_np.shape[0] - 1:

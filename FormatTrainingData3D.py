@@ -114,10 +114,10 @@ def main():
     args = parse_args()
 
 
-    args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
-    args.outdir       = "TEST3DReformat/"
-    args.folderidx    = str(0)
-    args.infileidx    = str(0)
+    # args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
+    # args.outdir       = "TEST3DReformat/"
+    # args.folderidx    = str(0)
+    # args.infileidx    = "TESTSPARSEALL"#str()
 
     print('Called with args:')
     print(args)
@@ -143,6 +143,9 @@ def main():
 
     feats_y_np = larcv.NumpyArrayFloat()
     tree.Branch("feats_y_np",feats_y_np)
+
+    feat_shapes_np = larcv.NumpyArrayFloat()
+    tree.Branch("feat_shapes_np",feat_shapes_np)
 
     voxelsteps_np = larcv.NumpyArrayFloat()
     tree.Branch("voxelsteps_np",voxelsteps_np)
@@ -177,7 +180,7 @@ def main():
     entry_per_file = 9999
     Loader = FancyLoader3D(PARAMS)
     # iter = int(tot_entries/entry_per_file)+1
-    # startEntry = 1
+    startEntry = 0
     Loader.currentEntry = startEntry
     endEntry = Loader.nentries_ll
     # endEntry = 2
@@ -193,10 +196,53 @@ def main():
 
         print("Number of Tracks:", len(loadingDict["features_image_vv"]))
         for idxx in range(len(loadingDict["features_image_vv"])):
-            print("Filling Tree", idxx)
-            feats_u_np.store(loadingDict['features_image_vv'][idxx][0].astype(np.float32))
-            feats_v_np.store(loadingDict['features_image_vv'][idxx][1].astype(np.float32))
-            feats_y_np.store(loadingDict['features_image_vv'][idxx][2].astype(np.float32))
+            featShapes = np.zeros((3,2))
+            sparseFeats_v = []
+            for p in range(3):
+                nonzeroIdx = np.nonzero(loadingDict['features_image_vv'][idxx][p])
+                featShapes[p,0] = loadingDict['features_image_vv'][idxx][p].shape[0]
+                featShapes[p,1] = loadingDict['features_image_vv'][idxx][p].shape[1]
+                nFeats = nonzeroIdx[0].shape[0]
+                print(nFeats,"nFeats")
+                sFeats = np.zeros((nFeats,4)) #x,y,nfeat,val
+                for iii in range(nFeats):
+                    sFeats[iii,0] = nonzeroIdx[0][iii]
+                    sFeats[iii,1] = nonzeroIdx[1][iii]
+                    sFeats[iii,2] = nonzeroIdx[2][iii]
+                    sFeats[iii,3] = loadingDict['features_image_vv'][idxx][p][nonzeroIdx[0][iii],nonzeroIdx[1][iii],nonzeroIdx[2][iii]]
+                print(sFeats.shape)
+                sparseFeats_v.append(sFeats)
+
+
+            # print("Filling Tree", idxx)
+            #
+            # print("\n\nChecking Sizes")
+            # print("    Planes:")
+            # for p in range(3):
+            #     print("        ",p)
+            #     print(loadingDict['features_image_vv'][idxx][p].shape, "shape cropped features")
+            #     nCroppedFeats = loadingDict['features_image_vv'][idxx][p].shape[0]* loadingDict['features_image_vv'][idxx][p].shape[1]*loadingDict['features_image_vv'][idxx][p].shape[2]
+            #     print(nCroppedFeats, "Number shape cropped features")
+            #     nSparseFeats = np.sum(np.where(loadingDict['features_image_vv'][idxx][p]!=0,1,0))
+            #     print(nSparseFeats, "Number nonzero idx")
+            #     print(nSparseFeats*1.0/nCroppedFeats, "Ratio Saved")
+            #
+            # stepsShape = loadingDict['voxSteps_vv'][idxx].shape
+            # print(stepsShape, "Step Shape")
+            # print(stepsShape[0]*stepsShape[1], "Step Numbers")
+            # print()
+            # imcoordShape = loadingDict['minImgCoords_v'][idxx].shape
+            # print(imcoordShape, "ImCoord Shape")
+            # print("\n\n")
+
+            # feats_u_np.store(loadingDict['features_image_vv'][idxx][0].astype(np.float32))
+            # feats_v_np.store(loadingDict['features_image_vv'][idxx][1].astype(np.float32))
+            # feats_y_np.store(loadingDict['features_image_vv'][idxx][2].astype(np.float32))
+
+            feats_u_np.store(sparseFeats_v[0].astype(np.float32))
+            feats_v_np.store(sparseFeats_v[1].astype(np.float32))
+            feats_y_np.store(sparseFeats_v[2].astype(np.float32))
+            feat_shapes_np.store(featShapes.astype(np.float32))
 
             voxelsteps_np.store(loadingDict['voxSteps_vv'][idxx].astype(np.float32))
             originInFullImg_np.store(loadingDict['minImgCoords_v'][idxx].astype(np.float32))
@@ -206,7 +252,7 @@ def main():
             mctrack_idx[0]    = loadingDict['mctrack_idx_v'][idxx]
             mctrack_length[0] = loadingDict['mctrack_length_v'][idxx]
             mctrack_pdg[0]    = loadingDict['mctrack_pdg_v'][idxx]
-            mctrack_energy[0]    = loadingDict['mctrack_energy_v'][idxx]
+            mctrack_energy[0] = loadingDict['mctrack_energy_v'][idxx]
 
             run[0]            = loadingDict['run_v'][idxx]
             subrun[0]         = loadingDict['subrun_v'][idxx]

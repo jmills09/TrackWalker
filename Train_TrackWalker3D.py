@@ -51,8 +51,8 @@ PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/merged_dlreco_75e9707a-a05b-4cb7-a246-bedc2982ff7e.root"
 # PARAMS['INFILE'] ="/home/jmills/workdir/TrackWalker/inputfiles/mcc9_v29e_dl_run3b_bnb_nu_overlay_nocrtmerge_TrackWalker_traindata_198files.root"
 # PARAMS['INFILE'] = "/home/jmills/workdir/TrackWalker/inputfiles/ReformattedInput/Reformat_LArMatch_Pad_010.root"
-PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/1/Reformat_LArMatch_ComplexTrackIdx_000.root"
-PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/1/Reformat_LArMatch_ComplexTrackIdx_000.root"
+PARAMS['INFILE_TRAIN'] = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_TESTSPARSE.root"
+PARAMS['INFILE_VAL']   = "/home/jmills/workdir/TrackWalker/TEST3DReformat/0/Reformat_LArMatch_ComplexTrackIdx_TESTSPARSE.root"
 
 # PARAMS['TRACK_IDX'] =0
 # PARAMS['EVENT_IDX'] =0
@@ -65,18 +65,18 @@ PARAMS['TWOWRITERS'] = True
 
 PARAMS['SAVE_MODEL'] = True #should the network save the model?
 PARAMS['CHECKPOINT_EVERY_N_TRACKS'] = 250000 # if not saving then this doesn't matter
-PARAMS['EPOCHS'] = 100
+PARAMS['EPOCHS'] = 300
 PARAMS['STOP_AFTER_NTRACKS'] = 999999999999999999999
 PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
-PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 1000
+PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 1
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
-PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 1000
+PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 1
 PARAMS['DEVICE'] = 'cuda:3'
 
 PARAMS['LOAD_SIZE']  = 100 #Number of Entries to Load training tracks from
 PARAMS['TRAIN_EPOCH_SIZE'] = -1 #500 # Number of Training Tracks to use (load )
 PARAMS['VAL_EPOCH_SIZE'] = -1 #int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
-PARAMS['VAL_SAMPLE_SIZE'] = 28
+PARAMS['VAL_SAMPLE_SIZE'] = 1
 
 PARAMS['SHUFFLE_DATASET'] = False
 PARAMS['VAL_IS_TRAIN'] = False # This will set the validation set equal to the training set
@@ -84,8 +84,9 @@ PARAMS['AREA_TARGET'] = True   # Change network to be predicting
 PARAMS['TARGET_BUFFER'] = 2
 PARAMS['DO_CROPSHIFT'] = False
 PARAMS['CROPSHIFT_MAXAMT'] = 2
+PARAMS['LEARNING_RATES'] = [(0, 0.00001)] #(Step, New LR), place steps in order.
 
-PARAMS['LEARNING_RATES'] = [(0, 0.001), (10000, 0.0001), (100000, 1e-05), (1000000, 1e-06)] #(Step, New LR), place steps in order.
+# PARAMS['LEARNING_RATES'] = [(0, 0.001), (10000, 0.0001), (100000, 1e-05), (1000000, 1e-06)] #(Step, New LR), place steps in order.
 PARAMS['NEXTSTEP_LOSS_WEIGHT'] = 20.0
 PARAMS['ENDSTEP_LOSS_WEIGHT']  = 1.0
 PARAMS['LOAD_PREVIOUS_CHECKPOINT'] = ''
@@ -153,25 +154,25 @@ def main():
 
     is_long = PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] and not PARAMS['AREA_TARGET']
 
+    # Make our trusty loggers
+    if not PARAMS['TWOWRITERS']:
+        # To Log Stats every N epoch
+        log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
+        log_stats_dict_epoch_val = make_log_stat_dict('epoch_val_')
+        # To Log Stats Every N Tracks Looked At
+        log_stats_dict_step_train = make_log_stat_dict('step_train_')
+        log_stats_dict_step_val = make_log_stat_dict('step_val_')
+    else:
+        log_stats_dict_epoch_train = make_log_stat_dict('epoch_')
+        log_stats_dict_epoch_val = make_log_stat_dict('epoch_')
+        # To Log Stats Every N Tracks Looked At
+        log_stats_dict_step_train = make_log_stat_dict('step_')
+        log_stats_dict_step_val = make_log_stat_dict('step_')
 
     step_counter = 0
     for epoch in range(PARAMS['EPOCHS']):  # again, normally you would NOT do 300 epochs, it is toy data
         print("\n-----------------------------------\nEpoch:",epoch,"\n")
         train_idx = -1
-
-        if not PARAMS['TWOWRITERS']:
-            # To Log Stats every N epoch
-            log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
-            log_stats_dict_epoch_val = make_log_stat_dict('epoch_val_')
-            # To Log Stats Every N Tracks Looked At
-            log_stats_dict_step_train = make_log_stat_dict('step_train_')
-            log_stats_dict_step_val = make_log_stat_dict('step_val_')
-        else:
-            log_stats_dict_epoch_train = make_log_stat_dict('epoch_')
-            log_stats_dict_epoch_val = make_log_stat_dict('epoch_')
-            # To Log Stats Every N Tracks Looked At
-            log_stats_dict_step_train = make_log_stat_dict('step_')
-            log_stats_dict_step_val = make_log_stat_dict('step_')
         number_train_loaded_so_far = 0
         n_to_load = PARAMS['LOAD_SIZE']
         while number_train_loaded_so_far < PARAMS['TRAIN_EPOCH_SIZE']:
@@ -241,7 +242,6 @@ def main():
                 loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
                 loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
                 loss_total = loss_next_steps_per_step + loss_endpoint
-                print(loss_total)
                 loss_total.backward()
                 optimizer.step()
                 np_idx_v = make_prediction_vector(PARAMS, np_pred)
@@ -259,6 +259,7 @@ def main():
                 if PARAMS['DO_TENSORLOG']:
                     calc_logger_stats(log_stats_dict_epoch_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_EPOCH_SIZE'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=True)
                     if PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']!=-1:
+                        print("Train calc", step_counter, step_counter%PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'])
                         calc_logger_stats(log_stats_dict_step_train, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'], np_pred_endpt, np_targ_endpt, is_train=True,is_epoch=False)
                     if step_counter%PARAMS['TRAIN_TRACKIDX_LOGINTERVAL']== 0:
                         print("Logging Train Step",step_counter)
@@ -347,7 +348,7 @@ def main():
                 writer_train.add_scalar("Epoch/train_average_off_distance", log_stats_dict_epoch_train['epoch_train_average_distance_off'],epoch)
                 writer_train.add_scalar("Epoch/train_frac_misIDas_endpoint", log_stats_dict_epoch_train['epoch_train_frac_misIDas_endpoint'],epoch)
                 writer_train.add_scalar("Epoch/train_lr", PARAMS['CURRENT_LR'],epoch)
-
+                log_stats_dict_epoch_train = make_log_stat_dict('epoch_train_')
             else:
                 writer_train.add_scalar('Epoch/loss_total', log_stats_dict_epoch_train['epoch_loss_average'], epoch)
                 writer_train.add_scalar('Epoch/loss_endpointnet', log_stats_dict_epoch_train['epoch_loss_endptnet'], epoch)
@@ -361,6 +362,7 @@ def main():
                 writer_train.add_scalar("Epoch/average_off_distance", log_stats_dict_epoch_train['epoch_average_distance_off'],epoch)
                 writer_train.add_scalar("Epoch/frac_misIDas_endpoint", log_stats_dict_epoch_train['epoch_frac_misIDas_endpoint'],epoch)
                 writer_train.add_scalar("Epoch/lr", PARAMS['CURRENT_LR'],epoch)
+                log_stats_dict_epoch_train = make_log_stat_dict('epoch_')
 
         if step_counter%PARAMS["STOP_AFTER_NTRACKS"] == 0:
             break

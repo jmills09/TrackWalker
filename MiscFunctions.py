@@ -275,6 +275,7 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
 
     dists = []
     np_pred_flat_idx_vec = make_prediction_vector(PARAMS, np_pred)
+
     for ix in range(np_pred_flat_idx_vec.shape[0]):
         this_dist = get_pred_targ_dist(np_pred_flat_idx_vec[ix],np_targ[ix], PARAMS['VOXCUBESIDE'])
         if ix != np_pred_flat_idx_vec.shape[0]-1:
@@ -287,6 +288,10 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
                 num_correct_5dist += 1
             if this_dist <= 10.0:
                 num_correct_10dist += 1
+            else:
+                print(np_pred_flat_idx_vec[ix],np_targ[ix], PARAMS['VOXCUBESIDE'])
+                print(this_dist)
+                assert 1==2
 
     # Calc Endpoint Network Metrics, Is last Pt Correct? How many steps get called end?
     for ix in range(endpt_pred.shape[0]):

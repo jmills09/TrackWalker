@@ -353,18 +353,6 @@ class FancyLoader3D():
             cropped_larfeat_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]    = feats_np_v[p][fromx:tox,fromy:toy].copy()
             cropped_anc_np[0+offlowx:coldim+offhighx,0+offlowy:rowdim+offhighy]        = anc_np_v[p][fromx:tox,fromy:toy].copy()
 
-            # print()
-            # print(p)
-            # print(cropped_larfeat_np.shape, "Shape of Larfeat Crop")
-            # print(fromx,tox, "Desired XRange")
-            # print(fromy,toy, "Desired YRange")
-            # print("In New Coord")
-            # print(offlowx,coldim+offhighx)
-            # print(minImgCoords[2], maxImgCoords[2], "XRange Calc")
-            # print(feats_np_v[1].shape, "Shape Before Cropping")
-            # print()
-            # print(fromx, "fromx")
-            # print(offlowx, "offlowx")
             cropped_feats_np_v.append(cropped_larfeat_np)
             cropped_anc_np_v.append(cropped_anc_np)
 

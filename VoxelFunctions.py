@@ -6,6 +6,7 @@ import socket
 from datetime import datetime
 from tensorboardX import SummaryWriter
 from larlite import larutil
+import math
 
 # These functions are to help voxelize the MicroBooNE detector for 3D track reco
 
@@ -32,6 +33,20 @@ class Voxelator:
             self.nXVoxels = int((self.xmax - self.xmin) / self.voxelSize + 1)
             self.nYVoxels = int((self.ymax - self.ymin) / self.voxelSize + 1)
             self.nZVoxels = int((self.zmax - self.zmin) / self.voxelSize + 1)
+        elif detectorType == "LARVOXNETMICROBOONE":
+            self.voxelSize = 1.0
+            self.driftVel  = larutil.LArProperties.GetME().DriftVelocity()
+
+            self.xmin = -43.9749 #(2399-3200)*0.5*driftVel
+            self.ymin = -120.0
+            self.zmin = 0.
+            self.xmax = 288.719
+            self.ymax = 120.0
+            self.zmax = 1037.
+            # Plus one for rounding error
+            self.nXVoxels = int(math.ceil((self.xmax - self.xmin) / self.voxelSize))
+            self.nYVoxels = int(math.ceil((self.ymax - self.ymin) / self.voxelSize))
+            self.nZVoxels = int(math.ceil((self.zmax - self.zmin) / self.voxelSize))
         else:
             print("DetectorType not set for Voxelization")
             assert 1==2

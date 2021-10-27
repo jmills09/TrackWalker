@@ -10,7 +10,7 @@ import numpy as np
 from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats
 from MiscFunctions import make_log_stat_dict, reravel_array, make_prediction_vector
 from MiscFunctions import blockPrint, enablePrint
-from FancyLoader3D import FancyLoader3D
+from LArVoxLoader import LArVoxLoader
 from ModelFunctions import LSTMTagger, run_validation_pass
 from VoxelFunctions import Voxelator
 import random
@@ -19,6 +19,8 @@ from array import array
 from larcv import larcv
 import os
 import argparse
+import sys
+import pdb
 
 
 
@@ -38,10 +40,15 @@ PARAMS = {}
 
 PARAMS['USE_CONV_IM'] = True
 # PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
-PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
+# PARAMS['LARVOXEL_CKPT'] = '/home/jmills/workdir/TrackWalker/larvoxel_ckpt/checkpoint.101000th.tar'
+PARAMS['LARVOXEL_CKPT'] = '/home/jmills/workdir/TrackWalker/larvoxel_ckpt/lv.multidecoder.checkpoint.15000th.tar'
+
+
+PARAMS['LARVOX_CFG'] = '/home/jmills/workdir/ubdl_gen2/larflow/larmatchnet/config_voxelmultidecoder.yaml'
+
 PARAMS['MASK_WC'] = False
 
-PARAMS['MIN_TRACK_LENGTH'] = 3.0
+PARAMS['MIN_TRACK_LENGTH'] = 2.0
 PARAMS['HIDDEN_DIM'] =1024
 PARAMS['PADDING'] =10
 PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1) # N_Features
@@ -71,8 +78,8 @@ PARAMS['VALIDATION_EPOCH_LOGINTERVAL'] = 1
 PARAMS['VALIDATION_TRACKIDX_LOGINTERVAL'] = 100
 PARAMS['TRAIN_EPOCH_LOGINTERVAL'] = 1
 PARAMS['TRAIN_TRACKIDX_LOGINTERVAL'] = 100
-# PARAMS['DEVICE'] = 'cuda:0'
-PARAMS['DEVICE'] = 'cpu'
+PARAMS['DEVICE'] = 'cuda:0'
+# PARAMS['DEVICE'] = 'cpu'
 PARAMS['LOAD_SIZE']  = 50
 PARAMS['TRAIN_EPOCH_SIZE'] = 500
 PARAMS['VAL_EPOCH_SIZE'] = int(0.8*PARAMS['TRAIN_EPOCH_SIZE'])
@@ -114,11 +121,10 @@ def main():
     args = parse_args()
 
 
-    args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
-    # args.infile       = "inputfiles/FailedDLReco.root"
-    args.outdir       = "sizetest/"
-    args.folderidx    = str(0)
-    args.infileidx    = "3d"#str()
+    # args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
+    # args.outdir       = "TEST3DReformat/"
+    # args.folderidx    = str(0)
+    # args.infileidx    = str(0)
 
     print('Called with args:')
     print(args)
@@ -127,66 +133,58 @@ def main():
     nbins = PARAMS['PADDING']*2+1
 
     # Create Outfile stuff:
-    outfile_str = "Wire_" if PARAMS['USE_CONV_IM'] == False else "LArMatch_"
+    outfile_str = "LArVox_"
     outfile_str = outfile_str + "ComplexTrackIdx_"
     outfile_str = args.outdir+args.folderidx+"/Reformat_" + outfile_str
     if not os.path.exists(args.outdir+args.folderidx):
         os.makedirs(args.outdir+args.folderidx)
 
+    tree    = ROOT.TTree("TrackWalker3DVoxInput","TrackWalker 3D Voxelized Input from LArVoxel MultiDecoder LArMatch Features")
 
-    tree    = ROOT.TTree("TrackWalker3DInput","TrackWalker 3D Input")
+    feats_np = larcv.NumpyArrayFloat()
+    tree.Branch("feats_np",feats_np)
 
-    feats_u_np = larcv.NumpyArrayFloat()
-    tree.Branch("feats_u_np",feats_u_np)
+    voxelsteps_np = larcv.NumpyArrayFloat()
+    tree.Branch("voxelsteps_np",voxelsteps_np)
 
-    feats_v_np = larcv.NumpyArrayFloat()
-    tree.Branch("feats_v_np",feats_v_np)
+    minVoxCoords_np = larcv.NumpyArrayFloat()
+    tree.Branch("minVoxCoords_np",minVoxCoords_np)
 
-    feats_y_np = larcv.NumpyArrayFloat()
-    tree.Branch("feats_y_np",feats_y_np)
+    maxVoxCoords_np = larcv.NumpyArrayFloat()
+    tree.Branch("maxVoxCoords_np",maxVoxCoords_np)
 
-    feat_shapes_np = larcv.NumpyArrayFloat()
-    tree.Branch("feat_shapes_np",feat_shapes_np)
-
-    # voxelsteps_np = larcv.NumpyArrayFloat()
-    # tree.Branch("voxelsteps_np",voxelsteps_np)
-    #
-    # originInFullImg_np = larcv.NumpyArrayFloat()
-    # tree.Branch("originInFullImg_np",originInFullImg_np)
-    #
     # charge_in_wires_np = larcv.NumpyArrayFloat()
     # tree.Branch("charge_in_wires_np",charge_in_wires_np)
     #
     # charge_in_truths_np = larcv.NumpyArrayFloat()
     # tree.Branch("charge_in_truths_np",charge_in_truths_np)
-    #
-    # entry = array('f',[0]) # single float
-    # tree.Branch("original_entry",entry,"original_entry/F")
-    # mctrack_idx = array('f',[0]) # single float
-    # tree.Branch("mctrack_idx",mctrack_idx,"mctrack_idx/F")
-    # mctrack_length = array('f',[0]) # single float
-    # tree.Branch("mctrack_length",mctrack_length,"mctrack_length/F")
-    # mctrack_pdg = array('f',[0]) # single float
-    # tree.Branch("mctrack_pdg",mctrack_pdg,"mctrack_pdg/F")
-    # mctrack_energy = array('f',[0]) # single float
-    # tree.Branch("mctrack_energy",mctrack_energy,"mctrack_energy/F")
-    # run = array('f',[0]) # single float
-    # tree.Branch("run",run,"run/F")
-    # subrun = array('f',[0]) # single float
-    # tree.Branch("subrun",subrun,"subrun/F")
-    # event_id = array('f',[0]) # single float
-    # tree.Branch("event_id",event_id,"event_id/F")
+
+    entry = array('f',[0]) # single float
+    tree.Branch("original_entry",entry,"original_entry/F")
+    mctrack_idx = array('f',[0]) # single float
+    tree.Branch("mctrack_idx",mctrack_idx,"mctrack_idx/F")
+    mctrack_length = array('f',[0]) # single float
+    tree.Branch("mctrack_length",mctrack_length,"mctrack_length/F")
+    mctrack_pdg = array('f',[0]) # single float
+    tree.Branch("mctrack_pdg",mctrack_pdg,"mctrack_pdg/F")
+    mctrack_energy = array('f',[0]) # single float
+    tree.Branch("mctrack_energy",mctrack_energy,"mctrack_energy/F")
+    run = array('f',[0]) # single float
+    tree.Branch("run",run,"run/F")
+    subrun = array('f',[0]) # single float
+    tree.Branch("subrun",subrun,"subrun/F")
+    event_id = array('f',[0]) # single float
+    tree.Branch("event_id",event_id,"event_id/F")
 
     # entry_per_file = 9999
     entry_per_file = 9999
-    Loader = FancyLoader3D(PARAMS)
+    Loader = LArVoxLoader(PARAMS)
     # iter = int(tot_entries/entry_per_file)+1
     startEntry = 0
     Loader.currentEntry = startEntry
     endEntry = Loader.nentries_ll
-    endEntry = 2
+    # endEntry = 341
     for i in range(startEntry,endEntry):
-
         loadingDict = Loader.load_fancy()
 
         # from MiscFunctions import save_im
@@ -195,64 +193,34 @@ def main():
         # voxelator = Voxelator(PARAMS)
         # voxelator.saveDetector3D(loadingDict['voxSteps_vv'][0])
 
-        print("Number of Tracks:", len(loadingDict["features_image_vv"]))
-        for idxx in range(len(loadingDict["features_image_vv"])):
-            if idxx == 0:
-                continue
-            featShapes = np.zeros((3,2))
-            sparseFeats_v = []
-            for p in range(3):
-                nonzeroIdx = np.nonzero(loadingDict['features_image_vv'][idxx][p])
-                featShapes[p,0] = loadingDict['features_image_vv'][idxx][p].shape[0]
-                featShapes[p,1] = loadingDict['features_image_vv'][idxx][p].shape[1]
-                nFeats = nonzeroIdx[0].shape[0]
-                sFeats = np.zeros((nFeats,4)) #x,y,nfeat,val
-                for iii in range(nFeats):
-                    sFeats[iii,0] = nonzeroIdx[0][iii]
-                    sFeats[iii,1] = nonzeroIdx[1][iii]
-                    sFeats[iii,2] = nonzeroIdx[2][iii]
-                    sFeats[iii,3] = loadingDict['features_image_vv'][idxx][p][nonzeroIdx[0][iii],nonzeroIdx[1][iii],nonzeroIdx[2][iii]]
-                sparseFeats_v.append(sFeats)
-
-
+        print("Number of Tracks:", len(loadingDict["voxfeatures_vv"]))
+        for idxx in range(len(loadingDict["voxfeatures_vv"])):
+            print("\n\n")
             print("Filling Tree", idxx)
+            print(loadingDict['voxfeatures_vv'][idxx].shape, loadingDict['voxfeatures_vv'][idxx].size, "Feats")
+            print(loadingDict['voxSteps_vv'][idxx].shape, loadingDict['voxSteps_vv'][idxx].size, "StepVals")
+            print(loadingDict['minVoxCoords_v'][idxx])
+            print(loadingDict['maxVoxCoords_v'][idxx])
+            print(type(loadingDict['voxfeatures_vv'][idxx]))
+            print(type(loadingDict['voxSteps_vv'][idxx]))
+            print(type(loadingDict['minVoxCoords_v'][idxx]))
+            print(type(loadingDict['maxVoxCoords_v'][idxx]))
 
-            print("\n\nChecking Sizes")
-            print("    Planes:")
-            for p in range(3):
-                print(p)
-                print("        ",loadingDict['features_image_vv'][idxx][p].shape, "shape cropped features")
-                nCroppedFeats = loadingDict['features_image_vv'][idxx][p].shape[0]* loadingDict['features_image_vv'][idxx][p].shape[1]*loadingDict['features_image_vv'][idxx][p].shape[2]
-                print("        ",nCroppedFeats, "Number shape cropped features")
-                nSparseFeats = np.sum(np.where(loadingDict['features_image_vv'][idxx][p]!=0,1,0))
-                print("        ",nSparseFeats, "Number nonzero idx")
-                print("        ",nSparseFeats*1.0/nCroppedFeats, "Ratio Saved")
-            print(featShapes)
-
-            print("Storing")
-            print(sparseFeats_v[0].shape)
-            print(sparseFeats_v[1].shape)
-            print(sparseFeats_v[2].shape)
-            print(featShapes.shape)
-
-            feats_u_np.store(sparseFeats_v[0].astype(np.float32))
-            feats_v_np.store(sparseFeats_v[1].astype(np.float32))
-            feats_y_np.store(sparseFeats_v[2].astype(np.float32))
-            feat_shapes_np.store(featShapes.astype(np.float32))
-
-            # voxelsteps_np.store(loadingDict['voxSteps_vv'][idxx].astype(np.float32))
-            # originInFullImg_np.store(loadingDict['minImgCoords_v'][idxx].astype(np.float32))
+            feats_np.store(loadingDict['voxfeatures_vv'][idxx].astype(np.float32))
+            voxelsteps_np.store(loadingDict['voxSteps_vv'][idxx].astype(np.float32))
+            minVoxCoords_np.store(loadingDict['minVoxCoords_v'][idxx].astype(np.float32))
+            maxVoxCoords_np.store(loadingDict['maxVoxCoords_v'][idxx].astype(np.float32))
             # charge_in_wires_np.store(loadingDict['charge_in_wires_v'][idxx].astype(np.float32))
             # charge_in_truths_np.store(loadingDict['charge_in_truths_v'][idxx].astype(np.float32))
-            # entry[0]          = loadingDict['entry_v'][idxx]
-            # mctrack_idx[0]    = loadingDict['mctrack_idx_v'][idxx]
-            # mctrack_length[0] = loadingDict['mctrack_length_v'][idxx]
-            # mctrack_pdg[0]    = loadingDict['mctrack_pdg_v'][idxx]
-            # mctrack_energy[0] = loadingDict['mctrack_energy_v'][idxx]
-            #
-            # run[0]            = loadingDict['run_v'][idxx]
-            # subrun[0]         = loadingDict['subrun_v'][idxx]
-            # event_id[0]       = loadingDict['eventid_v'][idxx]
+            entry[0]          = loadingDict['entry_v'][idxx]
+            mctrack_idx[0]    = loadingDict['mctrack_idx_v'][idxx]
+            mctrack_length[0] = loadingDict['mctrack_length_v'][idxx]
+            mctrack_pdg[0]    = loadingDict['mctrack_pdg_v'][idxx]
+            mctrack_energy[0] = loadingDict['mctrack_energy_v'][idxx]
+
+            run[0]            = loadingDict['run_v'][idxx]
+            subrun[0]         = loadingDict['subrun_v'][idxx]
+            event_id[0]       = loadingDict['eventid_v'][idxx]
 
             tree.Fill()
             idxx += 1

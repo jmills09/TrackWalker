@@ -3,8 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from MiscFunctions import calc_logger_stats, get_loss_weights_v2, reravel_array
-from ReformattedDataLoader import ReformattedDataLoader_MC
+from MiscFunctions import calc_logger_stats, calc_logger_stats_distshifter, get_loss_weights_v2, reravel_array
 
 
 class LSTMTagger(nn.Module):
@@ -89,43 +88,32 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             end_entry   = 0 + PARAMS['VAL_SAMPLE_SIZE']
         for i in range(PARAMS['VAL_SAMPLE_SIZE']):
             validation_data = reformatloader.get_val_data(1)
-            for step_images, targ_next_step_idx, targ_area_next_step in validation_data:
+            for step3d_crops_in_np, xyzShifts_targ_np in validation_data:
                 model.zero_grad()
-                step_images_in = prepare_sequence_steps(step_images).to(torch.device(PARAMS['DEVICE']))
-                n_steps = step_images_in.shape[0]
-                np_targ_endpt = np.zeros((n_steps))
-                np_targ_endpt[n_steps-1] = 1
-                endpoint_targ_t = torch.tensor(np_targ_endpt).to(torch.device(PARAMS['DEVICE']),dtype=torch.long)
-                is_long = PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] and not PARAMS['AREA_TARGET']
-                targets_loss  = None
-                targets_onept = prepare_sequence_steps(targ_next_step_idx,long=is_long)
-                if PARAMS['AREA_TARGET']:
-                    targets_loss = prepare_sequence_steps(targ_area_next_step,long=is_long).to(torch.device(PARAMS['DEVICE']))
-                else:
-                    targets_loss = targets_onept.to(torch.device(PARAMS['DEVICE']))
+                step3d_crops_in_t = torch.tensor(step3d_crops_in_np,dtype=torch.float).to(torch.device(PARAMS['DEVICE']))
+                # Run Forward Pass
+                xyzShifts_pred_t, endpoint_pred_scores_t, hidden_n, cell_n = model(step3d_crops_in_t)
+                # Create Endpoint Target Truth
+                endpoint_targ_np = np.zeros((step3d_crops_in_t.shape[0]))
+                endpoint_targ_np[step3d_crops_in_t.shape[0]-1] = 1
+                endpoint_targ_t = torch.tensor(endpoint_targ_np,dtype=torch.long).to(torch.device(PARAMS['DEVICE']))
+                # Get Endpoint Predictions in np
+                endpoint_pred_scores_np = np.argmax(endpoint_pred_scores_t.cpu().detach().numpy(),axis=1)
+                # Get Pred XYZ Shift in np, Rounded to ints for OffDist Calc
+                xyzShifts_pred_np = np.rint(xyzShifts_pred_t.cpu().detach().numpy())
+                xyzShifts_targ_t = torch.tensor(xyzShifts_targ_np).to(torch.device(PARAMS['DEVICE']))
 
-                # Step 3. Run our forward pass.
-                next_steps_pred_scores, endpoint_scores, hidden_n, cell_n = model(step_images_in)
-                np_pred = None
-                np_targ = None
-                np_pred_endpt = None
-                if PARAMS['AREA_TARGET']:
-                    npts = next_steps_pred_scores.cpu().detach().numpy().shape[0]
-                    np_pred = next_steps_pred_scores.cpu().detach().numpy().reshape(npts,PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'],PARAMS['VOXCUBESIDE'])
-                    np_targ = targets_onept.cpu().detach().numpy()
-                    np_pred_endpt = np.argmax(endpoint_scores.cpu().detach().numpy(),axis=1)
-                elif PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
-                    np_pred = np.argmax(next_steps_pred_scores.cpu().detach().numpy(),axis=1)
-                    np_targ = targets_onept.cpu().detach().numpy()
-                else:
-                    np_pred = np.rint(next_steps_pred_scores.cpu().detach().numpy()) # Rounded to integers
-                    np_targ = targets_onept.cpu().detach().numpy()
-                loss_next_steps = loss_function_next_step(next_steps_pred_scores, targets_loss)
+                # Calc loss and backward pass
+                loss_next_steps = loss_function_next_step(xyzShifts_pred_t, xyzShifts_targ_t)
                 vals_per_step = loss_next_steps.shape[1]
                 loss_next_steps_per_step =torch.mean(torch.div(torch.sum(loss_next_steps, dim=1),vals_per_step))*PARAMS['NEXTSTEP_LOSS_WEIGHT']
-                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_scores, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
+                loss_endpoint   = torch.mean(loss_function_endpoint(endpoint_pred_scores_t, endpoint_targ_t))*PARAMS['ENDSTEP_LOSS_WEIGHT']
                 loss_total = loss_next_steps_per_step + loss_endpoint
-                calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['VAL_SAMPLE_SIZE'], np_pred_endpt, np_targ_endpt, is_train=False, is_epoch=is_epoch)
+                if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+                    calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['VAL_SAMPLE_SIZE'], np_pred_endpt, np_targ_endpt, is_train=False, is_epoch=is_epoch)
+                else:
+                    calc_logger_stats_distshifter(log_stats_dict, PARAMS, xyzShifts_pred_np, xyzShifts_targ_np, loss_total, loss_endpoint, loss_next_steps_per_step, PARAMS['VAL_SAMPLE_SIZE'], endpoint_pred_scores_np, endpoint_targ_np, is_train=False, is_epoch=is_epoch)
+
         print("Loaded Val Entries ", start_entry, "to", reformatloader.current_val_entry)
         prestring = "step_"
         folder = "Step/"
@@ -143,6 +131,13 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             writer.add_scalar(folder+'validation_acc_10dist', log_stats_dict[prestring+'val_acc_10dist'], log_idx)
             writer.add_scalar(folder+'validation_num_correct_exact', log_stats_dict[prestring+'val_num_correct_exact'], log_idx)
             writer.add_scalar(folder+"validation_average_off_distance", log_stats_dict[prestring+'val_average_distance_off'],log_idx)
+            if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] != True:
+                writer.add_scalar(folder+"validation_average_off_distanceX", log_stats_dict[prestring+'val_offDistX'],log_idx)
+                writer.add_scalar(folder+"validation_average_off_distanceY", log_stats_dict[prestring+'val_offDistY'],log_idx)
+                writer.add_scalar(folder+"validation_average_off_distanceZ", log_stats_dict[prestring+'val_offDistZ'],log_idx)
+                writer.add_scalar(folder+"validation_predStepDist", log_stats_dict[prestring+'val_predStepDist'],log_idx)
+                writer.add_scalar(folder+"validation_trueStepDist", log_stats_dict[prestring+'val_trueStepDist'],log_idx)
+
             writer.add_scalar(folder+"validation_frac_misIDas_endpoint", log_stats_dict[prestring+'val_frac_misIDas_endpoint'],log_idx)
             writer.add_scalar(folder+"validation_lr", PARAMS['CURRENT_LR'],log_idx)
         else:
@@ -156,5 +151,11 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
             writer.add_scalar(folder+'acc_10dist', log_stats_dict[prestring+'acc_10dist'], log_idx)
             writer.add_scalar(folder+'num_correct_exact', log_stats_dict[prestring+'num_correct_exact'], log_idx)
             writer.add_scalar(folder+"average_off_distance", log_stats_dict[prestring+'average_distance_off'],log_idx)
+            if PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] != True:
+                writer.add_scalar(folder+"average_off_distanceX", log_stats_dict[prestring+'offDistX'],log_idx)
+                writer.add_scalar(folder+"average_off_distanceY", log_stats_dict[prestring+'offDistY'],log_idx)
+                writer.add_scalar(folder+"average_off_distanceZ", log_stats_dict[prestring+'offDistZ'],log_idx)
+                writer.add_scalar(folder+"predStepDist", log_stats_dict[prestring+'predStepDist'],log_idx)
+                writer.add_scalar(folder+"trueStepDist", log_stats_dict[prestring+'trueStepDist'],log_idx)
             writer.add_scalar(folder+"frac_misIDas_endpoint", log_stats_dict[prestring+'frac_misIDas_endpoint'],log_idx)
             writer.add_scalar(folder+"lr", PARAMS['CURRENT_LR'],log_idx)

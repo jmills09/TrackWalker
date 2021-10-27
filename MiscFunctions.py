@@ -232,7 +232,7 @@ def make_prediction_vector(PARAMS, np_pred):
         np_preds_vec[ix] = np.argmax(np_flat,axis=0)
     return np_preds_vec
 
-def make_log_stat_dict(namestring=''):
+def make_log_stat_dict(namestring='',PARAMS=None):
     if namestring != '':
         if namestring[-1] != "_":
             namestring = namestring + "_"
@@ -249,6 +249,13 @@ def make_log_stat_dict(namestring=''):
     log_dict[namestring+'acc_5dist']= 0
     log_dict[namestring+'acc_10dist']= 0
     log_dict[namestring+'average_distance_off']= 0
+    if PARAMS != None and PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER'] != True:
+        log_dict[namestring+'offDistX']= 0
+        log_dict[namestring+'offDistY']= 0
+        log_dict[namestring+'offDistZ']= 0
+        log_dict[namestring+'predStepDist']= 0
+        log_dict[namestring+'trueStepDist']= 0
+
     return log_dict
 
 def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
@@ -318,8 +325,81 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
     return log_stats_dict
 
 
+def calc_logger_stats_distshifter(log_stats_dict, PARAMS, np_pred, np_targ,
+            loss_total, loss_endptnet, loss_stepnet,
+            batch_size, endpt_pred, endpt_targ,
+            is_train=True, is_epoch=True,no_prestring=False):
+
+    num_correct_endpoint = 0
+    num_mislabeledas_endpoint = 0
+    num_correct_exact = 0
+    num_correct_2dist = 0
+    num_correct_5dist = 0
+    num_correct_10dist = 0
+    prestring = ""
+    if is_epoch:
+        prestring = "epoch_"
+    else:
+        prestring = "step_"
+    if not PARAMS['TWOWRITERS']:
+        if is_train:
+            prestring = prestring + "train_"
+        else:
+            prestring = prestring + "val_"
+
+    dists = []
+    distx = []
+    disty = []
+    distz = []
+    stepDist = []
+    trueStepDist = []
+    for ix in range(np_pred.shape[0]):
+        this_dist = ((np_pred[ix,0] - np_targ[ix,0])**2 + (np_pred[ix,1] - np_targ[ix,1])**2 + (np_pred[ix,2] - np_targ[ix,2])**2)**0.5
+        dists.append(this_dist)
+        distx.append(abs(np_pred[ix,0] - np_targ[ix,0]))
+        disty.append(abs(np_pred[ix,1] - np_targ[ix,1]))
+        distz.append(abs(np_pred[ix,2] - np_targ[ix,2]))
+        stepDist.append(((np_pred[ix,0])**2 + (np_pred[ix,1])**2 + (np_pred[ix,2])**2)**0.5)
+        trueStepDist.append(((np_targ[ix,0])**2 + (np_targ[ix,1])**2 + (np_targ[ix,2])**2)**0.5)
+        if this_dist == 0:
+            num_correct_exact = num_correct_exact + 1
+        if this_dist <= 2.0:
+            num_correct_2dist += 1
+        if this_dist <= 5.0:
+            num_correct_5dist += 1
+        if this_dist <= 10.0:
+            num_correct_10dist += 1
 
 
+    # Calc Endpoint Network Metrics, Is last Pt Correct? How many steps get called end?
+    for ix in range(endpt_pred.shape[0]):
+        if endpt_pred[ix] == 1 and endpt_targ[ix] == 1:
+            num_correct_endpoint += 1
+        elif endpt_pred[ix] == 1 and endpt_targ[ix] != 1:
+            num_mislabeledas_endpoint += 1
+
+
+    log_stats_dict[prestring+'loss_average'] += loss_total.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'loss_endptnet'] += loss_endptnet.cpu().detach().numpy()/batch_size
+    log_stats_dict[prestring+'loss_stepnet'] += loss_stepnet.cpu().detach().numpy()/batch_size
+
+    log_stats_dict[prestring+'acc_endpoint'] += float(num_correct_endpoint)/batch_size
+    log_stats_dict[prestring+'num_correct_exact'] += float(num_correct_exact)/batch_size
+    log_stats_dict[prestring+'frac_misIDas_endpoint'] += num_mislabeledas_endpoint/float(endpt_pred.shape[0]-1)/batch_size
+
+    if len(dists) != 0:
+        log_stats_dict[prestring+'acc_exact'] += float(num_correct_exact)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_2dist'] += float(num_correct_2dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_5dist'] += float(num_correct_5dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'acc_10dist'] += float(num_correct_10dist)/float(len(dists))/batch_size
+        log_stats_dict[prestring+'average_distance_off'] += np.mean(dists)/batch_size
+        if not PARAMS['CLASSIFIER_NOT_DISTANCESHIFTER']:
+            log_stats_dict[prestring+'offDistX'] += np.mean(distx)/batch_size
+            log_stats_dict[prestring+'offDistY'] += np.mean(disty)/batch_size
+            log_stats_dict[prestring+'offDistZ'] += np.mean(distz)/batch_size
+            log_stats_dict[prestring+'predStepDist'] += np.mean(stepDist)/batch_size
+            log_stats_dict[prestring+'trueStepDist'] += np.mean(trueStepDist)/batch_size
+    return log_stats_dict
 
 
 
@@ -468,6 +548,53 @@ def save_im_trackline(np_arr, trackline, savename="file",canv_x=-1,canv_y=-1,tit
 
     canv.SaveAs(savename+'.png')
     return 0
+
+def save_im_multitracks3D(filename, feats_v, recoTrack_tgraphs_vv, vertexImgCoords):
+    crop_pad = 50
+    wires_v = [feats_v[p].copy() for p in range(3)]
+    print(vertexImgCoords, "Cropping Final Image Around Vertex")
+    croppedIm_v = [cropped_np(wires_v[p], vertexImgCoords[p+1], vertexImgCoords[0], crop_pad) for p in range(3)]
+    print(croppedIm_v[1])
+    ROOT.gStyle.SetOptStat(0)
+    x_len = croppedIm_v[0].shape[0]
+    y_len = croppedIm_v[0].shape[1]
+    if filename=="":
+        filename="Test"
+
+    hist_v = [ROOT.TH2F(filename+"_"+str(p),filename+"_"+str(p),x_len,0,(x_len)*1.0,y_len,0,(y_len)*1.0) for p in range(3)]
+    for x in range(x_len):
+        for y in range(y_len):
+            for p in range(3):
+                hist_v[p].SetBinContent(x+1,y+1,croppedIm_v[p][x,y])
+    for p in range(3):
+        canv = ROOT.TCanvas('canv','canv',1200,1000)
+        hist_v[p].Draw("COLZ")
+        vtxTgraph = ROOT.TGraph()
+        vtxTgraph.SetMarkerColor(1)
+        vtxTgraph.SetMarkerStyle(24)
+        vtxTgraph.SetMarkerSize(3)
+        vtxTgraph.SetPoint(0,crop_pad+0.5,crop_pad+0.5)
+
+        remadeTgraphs = []
+        for idx in range(len(recoTrack_tgraphs_vv[p])):
+            remadeTgraphs.append(ROOT.TGraph())
+
+        colorWheel = [2,7,4,3,6,5,9,12,46,13,14,15,16]
+        for idx in range(len(recoTrack_tgraphs_vv[p])):
+            remadeTgraphs[idx].SetMarkerColor(colorWheel[idx])
+            remadeTgraphs[idx].SetMarkerSize(2)
+            remadeTgraphs[idx].SetMarkerStyle(24)
+            remadeTgraphs[idx].SetLineWidth(2)
+            remadeTgraphs[idx].SetLineColor(colorWheel[idx])
+
+            for ptIdx in range(recoTrack_tgraphs_vv[p][idx].GetN()):
+                oldX, oldY = ROOT.Double(0), ROOT.Double(0)
+                recoTrack_tgraphs_vv[p][idx].GetPoint(ptIdx,oldX,oldY)
+                remadeTgraphs[idx].SetPoint(ptIdx,oldX-vertexImgCoords[p+1]+crop_pad,oldY-vertexImgCoords[0]+crop_pad)
+            remadeTgraphs[idx].Draw("SAMELP")
+        vtxTgraph.Draw("SAMELP")
+        canv.SaveAs(filename+"_"+str(p)+".png")
+
 
 def save_im_multitracks(filename, wireIm_np, recoTrack_tgraphs_v, vertex_x, vertex_y):
     crop_pad = 50

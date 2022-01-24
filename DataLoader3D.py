@@ -75,33 +75,11 @@ class DataLoader3D:
             if i >= self.nentries_train:
                 i = -1
                 continue
-
-            # print("Doing Track ",i)
-            self.intree.GetEntry(i)
-            # print("Loaded Train",i)
-            # np array of x,y,z,StepIDX in full detector voxel coord
-            voxelsteps_np       = self.intree.voxelsteps_np.tonumpy().copy()
-            # Min Row, Min Cols for the feature images (to offset vox projection)
-            minVox_np       = self.intree.minVoxCoords_np.tonumpy().astype(np.int32).copy()
-            maxVox_np       = self.intree.maxVoxCoords_np.tonumpy().astype(np.int32).copy()
-
-            # if there is only 1 or fewer points on the index map then dont include track
-            if voxelsteps_np.shape[0] < 2:
+            featcrops_np_v, xyzShifts_np_v, voxelsteps_final_np_v, isOK = self.get_data(i)
+            if isOK == False:
                 continue
 
-            # In (xVox,yVox,zVox,32 Feats) a sparse array of feats around the given track
-            sparse_feats_np             = self.intree.feats_np.tonumpy().copy()
-
-
-            featcrops_np_v, xyzShifts_np_v = \
-                self.make_track_crops(sparse_feats_np, voxelsteps_np, minVox_np, maxVox_np, self.PARAMS)
-
-            if self.RAND_FLIP_INPUTS:
-                print("Random flipping of images not implemented for complex dataloading")
-                assert 1==2
-
-
-            training_data.append((featcrops_np_v,xyzShifts_np_v))
+            training_data.append((featcrops_np_v,xyzShifts_np_v,voxelsteps_final_np_v))
             nAdded += 1
 
         self.current_train_entry = i+1
@@ -109,6 +87,37 @@ class DataLoader3D:
         if self.current_train_entry == self.nentries_train:
             self.current_train_entry = 0
         return training_data
+
+
+    def get_data(self, i):
+        self.intree.GetEntry(i)
+
+
+        # np array of x,y,z,StepIDX in full detector voxel coord
+        voxelsteps_np       = self.intree.voxelsteps_np.tonumpy().copy()
+        # Min Row, Min Cols for the feature images (to offset vox projection)
+        minVox_np       = self.intree.minVoxCoords_np.tonumpy().astype(np.int32).copy()
+        maxVox_np       = self.intree.maxVoxCoords_np.tonumpy().astype(np.int32).copy()
+        # In (xVox,yVox,zVox,32 Feats) a sparse array of feats around the given track
+        sparse_feats_np = self.intree.feats_np.tonumpy().copy()
+
+        # if there is only 1 or fewer points on the index map then dont include track
+        if voxelsteps_np.shape[0] < 2 or len(sparse_feats_np.shape) != 2:
+            print("Skipping issue with Saved ROOT Track Shape")
+            return None, None, None, 0
+
+        featcrops_np_v, xyzShifts_np_v, voxelsteps_final_np_v = \
+            self.make_track_crops(sparse_feats_np, voxelsteps_np, minVox_np, maxVox_np, self.PARAMS)
+
+        if len(featcrops_np_v) < 2:
+            print("Skipping issue with Saved ROOT Track Shape after making track crops")
+            return None, None, None, 0
+
+        if self.RAND_FLIP_INPUTS:
+            print("Random flipping of images not implemented for complex dataloading")
+            assert 1==2
+
+        return featcrops_np_v, xyzShifts_np_v, voxelsteps_final_np_v, 1
 
     def set_current_entry(self,entry):
         self.current_train_entry = entry
@@ -133,28 +142,9 @@ class DataLoader3D:
                 i = -1
                 continue
 
-            self.intree.GetEntry(i)
-            # print("Loaded Val",i)
-            # np array of x,y,z,StepIDX in full detector voxel coord
-            voxelsteps_np       = self.intree.voxelsteps_np.tonumpy().copy()
-            # Min Row, Min Cols for the feature images (to offset vox projection)
-            minVox_np       = self.intree.minVoxCoords_np.tonumpy().astype(np.int32).copy()
-            maxVox_np       = self.intree.maxVoxCoords_np.tonumpy().astype(np.int32).copy()
-
-            # if there is only 1 or fewer points on the index map then dont include track
-            if voxelsteps_np.shape[0] < 2:
+            featcrops_np_v, xyzShifts_np_v, voxelsteps_final_np_v, isOK = self.get_data(i)
+            if isOK == False:
                 continue
-
-            # In (xVox,yVox,zVox,32 Feats) a sparse array of feats around the given track
-            sparse_feats_np             = self.intree.feats_np.tonumpy().copy()
-
-
-            featcrops_np_v, xyzShifts_np_v = \
-                self.make_track_crops(sparse_feats_np, voxelsteps_np, minVox_np, maxVox_np, self.PARAMS)
-
-            if self.RAND_FLIP_INPUTS:
-                print("Random flipping of images not implemented for complex dataloading")
-                assert 1==2
 
 
             val_data.append((featcrops_np_v,xyzShifts_np_v))
@@ -168,34 +158,48 @@ class DataLoader3D:
 
 
     def make_track_crops(self, sparse_feats_np, voxelsteps_np, minVox_np, maxVox_np, PARAMS):
+        # print("Printing True Track")
+        # for idx in range(voxelsteps_np.shape[0]):
+        #     print(voxelsteps_np[idx,:])
         feat_idx = sparse_feats_np[:,0:3].copy().astype(np.int32)
-        feat_steps_np_v = []
-        xyzShifts_np_v  = []
+        feat_steps_np_v        = []
+        xyzShifts_np_v         = []
+        noshiftVoxelIdx_np_v   = []
+        shiftVoxelIdx_np_v     = []
+        targVoxelIdx_np_v      = []
         flattened_positions_v  = []
-        area_positions_v  = []
+        area_positions_v       = []
         nSteps = 0
-        endVoxelPosition  = voxelsteps_np[-1,:].copy()
-        # Get First Position
-        thisVoxelPosition = voxelsteps_np[0,:].copy()
+        # Get First and Last Position
+        startVoxelPosition = voxelsteps_np[0,:].copy()
+        endVoxelPosition   = voxelsteps_np[-1,:].copy()
+        thisVoxelPosition  = startVoxelPosition.copy()
         shiftedthisVoxelPosition = thisVoxelPosition.copy()
-        nextStepIdx = 0
-        if PARAMS['DO_CROPSHIFT']:
-            for i in range(3):
-                shift_amt = PARAMS['CROPSHIFT_MAXAMT']
-                delta = np.random.randint(-shift_amt, shift_amt+1)
-                shiftedthisVoxelPosition[i] +=delta
-        voxelsteps_np_idx = 0
         # Repopulate the part of the detector we saved for this track:
         denseFeatPartialDetector = np.zeros((maxVox_np[0]-minVox_np[0],maxVox_np[1]-minVox_np[1],maxVox_np[2]-minVox_np[2],PARAMS['NFEATS']))
         denseFeatPartialDetector[feat_idx[:,0]-minVox_np[0],feat_idx[:,1]-minVox_np[1],feat_idx[:,2]-minVox_np[2]] = sparse_feats_np[:,3:]
+
+        nextStepIdx = 0
+        voxelsteps_np_idx = 0
         ct = 0
-        while np.array_equal(shiftedthisVoxelPosition,endVoxelPosition) != True:
+        while np.array_equal(shiftedthisVoxelPosition[0:3],endVoxelPosition[0:3]) != True:
             ct +=1
+            noshiftVoxelIdx_np_v.append(shiftedthisVoxelPosition)
+            if PARAMS['DO_CROPSHIFT']:
+                # for i in range(3):
+                #     shift_amt = PARAMS['CROPSHIFT_MAXAMT']
+                #     delta = np.random.randint(-shift_amt, shift_amt+1)
+                #     shiftedthisVoxelPosition[i] +=delta
+                shiftedthisVoxelPosition[np.random.randint(0,3)] += np.random.randint(-PARAMS['CROPSHIFT_MAXAMT'],PARAMS['CROPSHIFT_MAXAMT']+1)
+
+
             cropMins   = [int(shiftedthisVoxelPosition[i]-PARAMS['PADDING']-minVox_np[i])   for i in range(3)]
             cropMaxes  = [int(shiftedthisVoxelPosition[i]+PARAMS['PADDING']+1-minVox_np[i]) for i in range(3)]
             currentFeatCrop = denseFeatPartialDetector[cropMins[0]:cropMaxes[0],cropMins[1]:cropMaxes[1],cropMins[2]:cropMaxes[2]].copy()
             if currentFeatCrop.shape != (PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1,PARAMS['PADDING']*2+1,PARAMS['NFEATS']):
                 print()
+                print("Failure to Crop correct shape of features")
+                print(shiftedthisVoxelPosition)
                 print(currentFeatCrop.shape)
                 print(denseFeatPartialDetector.shape)
                 print(cropMins[0],cropMaxes[0],cropMins[1],cropMaxes[1],cropMins[2],cropMaxes[2])
@@ -205,33 +209,56 @@ class DataLoader3D:
             #        less than or equal to PARAMS['TARG_STEP_DIST']
             #        The highest value in the voxelsteps_np[:,3] 'rank' possible
             currentStepDist = 0
-            nextVoxelStep = shiftedthisVoxelPosition
+            nextVoxelStep = np.array([-1.,-1.,-1.,-1.])
             for stepIdx in range(voxelsteps_np_idx,voxelsteps_np.shape[0]):
                 testStep = voxelsteps_np[stepIdx,:].copy()
                 dist = ((shiftedthisVoxelPosition[0] - testStep[0])**2 + (shiftedthisVoxelPosition[1] - testStep[1])**2 + (shiftedthisVoxelPosition[2] - testStep[2])**2)**0.5
+                # print("    ", testStep,end='')
                 if dist <= PARAMS['TARG_STEP_DIST'] and testStep[3] > nextVoxelStep[3]:
                     nextVoxelStep = testStep
                     nextStepIdx   = stepIdx
-            if np.array_equal(shiftedthisVoxelPosition,nextVoxelStep):
-                nextVoxelStep = voxelsteps_np[nextStepIdx+1,:]
-                nextStepIdx   = nextStepIdx+1
+                    # print(nextVoxelStep, "Next Step Set",end='')
+                # print()
+
+
 
             xyzShift = nextVoxelStep[0:3].copy() - shiftedthisVoxelPosition[0:3].copy()
-            shiftedthisVoxelPosition = nextVoxelStep
-            if PARAMS['DO_CROPSHIFT']:
-                for i in range(3):
-                    shift_amt = PARAMS['CROPSHIFT_MAXAMT']
-                    delta = np.random.randint(-shift_amt, shift_amt+1)
-                    shiftedthisVoxelPosition[i] +=delta
+            # print(xyzShift)
+            # if np.sum(xyzShift*xyzShift)**0.5 < 2:
+                # print()
+                # print("Stepping:",np.sum(xyzShift*xyzShift)**0.5)
+                # print("Starting Debug")
+                # print("    ",shiftedthisVoxelPosition,"Starting Position")
+                # currentStepDist = 0
+                # nextVoxelStep = np.array([-1.,-1.,-1.,-1.])
+                # for stepIdx in range(voxelsteps_np_idx,voxelsteps_np.shape[0]):
+                #     testStep = voxelsteps_np[stepIdx,:].copy()
+                #     dist = ((shiftedthisVoxelPosition[0] - testStep[0])**2 + (shiftedthisVoxelPosition[1] - testStep[1])**2 + (shiftedthisVoxelPosition[2] - testStep[2])**2)**0.5
+                #     # print("    ", testStep,end='')
+                #     if dist <= PARAMS['TARG_STEP_DIST'] and testStep[3] > nextVoxelStep[3]:
+                #         nextVoxelStep = testStep
+                #         nextStepIdx   = stepIdx
+                #         print("        ",testStep,"Test Step",dist, " Target Position Set")
+                #     else:
+                #         print("        ",testStep,"Test Step",dist)
+
+                # assert 1==2
 
 
+            xyzShift = xyzShift/PARAMS['CONVERT_OUT_TO_DIST']
             feat_steps_np_v.append(currentFeatCrop)
             xyzShifts_np_v.append(xyzShift)
+            targVoxelIdx_np_v.append(nextVoxelStep)
+            shiftVoxelIdx_np_v.append(shiftedthisVoxelPosition)
+            # Change current position to next position
+            shiftedthisVoxelPosition = nextVoxelStep
 
         cropMins   = [int(endVoxelPosition[i]-PARAMS['PADDING']-minVox_np[i])   for i in range(3)]
         cropMaxes  = [int(endVoxelPosition[i]+PARAMS['PADDING']+1-minVox_np[i]) for i in range(3)]
         feat_steps_np_v.append(denseFeatPartialDetector[cropMins[0]:cropMaxes[0],cropMins[1]:cropMaxes[1],cropMins[2]:cropMaxes[2]].copy())
         xyzShifts_np_v.append(np.zeros((3,)).astype(np.float32))
+        targVoxelIdx_np_v.append(endVoxelPosition)
+        shiftVoxelIdx_np_v.append(endVoxelPosition)
 
         feat_steps_np_v = np.stack(feat_steps_np_v,axis=0)
         try:
@@ -240,50 +267,12 @@ class DataLoader3D:
             for xyz in xyzShifts_np_v:
                 print(xyz)
             assert 1==2
-        return feat_steps_np_v, xyzShifts_np_v
+        # print("Printing Track Info")
+        # for idx in range(len(targVoxelIdx_np_v)):
+        #     print(shiftVoxelIdx_np_v[idx], targVoxelIdx_np_v[idx], xyzShifts_np_v[idx]*PARAMS['CONVERT_OUT_TO_DIST'], np.sum(xyzShifts_np_v[idx]*xyzShifts_np_v[idx])**0.5*PARAMS['CONVERT_OUT_TO_DIST'])
+        # assert 1==2
+        return feat_steps_np_v, xyzShifts_np_v, shiftVoxelIdx_np_v
 
-
-        # for voxIdx in range(voxelsteps_np.shape[0]):
-        #     thisVoxelPosition = voxelsteps_np[voxIdx,:].copy()
-        #     shiftedthisVoxelPosition = thisVoxelPosition.copy()
-        #     if PARAMS['DO_CROPSHIFT']:
-        #         print("CropShifting not implemented for 3d")
-        #         assert 1==2
-        #         for i in range(3):
-        #             shift_amt = PARAMS['CROPSHIFT_MAXAMT']
-        #             delta = np.random.randint(-shift_amt, shift_amt+1)
-        #             shiftedthisVoxelPosition[i] +=delta
-        #
-        #     # Grab Feature Images cropped around this 3d position's projections
-        #     pos3d = self.voxelator.get3dCoord(shiftedthisVoxelPosition)
-        #     imgcoords = getprojectedpixel_hardcoded(pos3d[0],pos3d[1],pos3d[2])
-        #     lowcoords   = [int(imgcoords[p]-originInFullImg_np[p]-PARAMS['PADDING']) for p in range(4)]
-        #     highcoords  = [int(imgcoords[p]-originInFullImg_np[p]+PARAMS['PADDING']+1) for p in range(4)]
-        #
-        #     feat_crops_np    = [feat_im_v[p][lowcoords[p+1]:highcoords[p+1], lowcoords[0]:highcoords[0],:].copy() for p in range(3)]
-        #     feat_crops_np = np.stack(feat_crops_np,axis=0)
-        #
-        #     feat_steps_np_v.append(feat_crops_np)
-        #     if voxIdx == voxelsteps_np.shape[0] - 1:
-        #         flatPosition = self.getNextStepClass(None, dim=PARAMS['VOXCUBESIDE'], isEndpoint=True)
-        #         flattened_positions_v.append(flatPosition)
-        #         if PARAMS['AREA_TARGET']:
-        #             zeros_np = np.zeros((PARAMS['VOXCUBESIDE']**3))
-        #             zeros_np[flatPosition] = 1
-        #             area_positions_v.append(zeros_np)
-        #     else:
-        #         diffVox = voxelsteps_np[voxIdx+1,:].copy() - shiftedthisVoxelPosition + 1 #(Shift to all position vals)
-        #         flatPosition = self.getNextStepClass(diffVox, dim=PARAMS['VOXCUBESIDE'])
-        #         flattened_positions_v.append(flatPosition)
-        #         if PARAMS['AREA_TARGET']:
-        #             zeros_np = np.zeros((PARAMS['VOXCUBESIDE']**3))
-        #             zeros_np[flatPosition] = 1
-        #             area_positions_v.append(zeros_np)
-        #     # if PARAMS['AREA_TARGET']:
-        #         # zeros_np = np.zeros(stepidx_crop.shape)
-        #         # area_positions_v.append(unravel_array(paste_target(zeros_np,nextcropimPosition[0][0],nextcropimPosition[1][0],PARAMS['TARGET_BUFFER'])))
-        #
-        # return feat_steps_np_v, flattened_positions_v, area_positions_v
 
     def getNextStepClass(self, nextStepIdx_v, dim, isEndpoint=False ):
         if isEndpoint == True:

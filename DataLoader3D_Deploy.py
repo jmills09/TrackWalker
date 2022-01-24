@@ -6,7 +6,8 @@ from array import *
 from larlite import larutil
 from ublarcvapp import ublarcvapp
 from MiscFunctions import cropped_np, unravel_array, reravel_array, paste_target
-from LArMatchModel import LArMatchConvNet
+# from LArMatchModel import LArMatchConvNet
+from LArVoxelModel import LArVoxelModel
 from VoxelFunctions import Voxelator
 
 
@@ -19,18 +20,11 @@ class DataLoader3D_Deploy:
         self.NeutrinoVertexer = ublarcvapp.mctools.NeutrinoVertex()
         self.LArbysMC         = ublarcvapp.mctools.LArbysMC()
         self.LArbysMC.initialize()
-        self.voxelator = Voxelator(self.PARAMS)
+        self.voxelator = Voxelator(self.PARAMS,"LARVOXNETMICROBOONE")
 
         self.iocv = None
-        self.LArMatchNet = None
-        if PARAMS['USE_CONV_IM'] == False:
-            self.iocv =  larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
-            self.iocv.set_verbosity(5)
-            self.iocv.reverse_all_products() # Do I need this?
-            self.iocv.add_in_file(self.PARAMS['INFILE'])
-            self.iocv.initialize()
-        else:
-            self.LArMatchNet = LArMatchConvNet(self.PARAMS)
+        # self.LArMatchNet = None
+        self.LArVoxelNet = LArVoxelModel(self.PARAMS)
 
         if deploy == True:
             self.iocv =  larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
@@ -337,6 +331,24 @@ class DataLoader3D_Deploy:
 
 
     def getDeployDictMCNU(self, deployDict):
+        # Before Voxelnet
+        # neutrino_vertex = self.NeutrinoVertexer.getPos3DwSCE(self.ioll, self.SCEUBooNE)
+        #
+        # if is_inside_boundaries(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]) == False:
+        #     if self.verbose:
+        #         print(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2], " Out of Bounds")
+        #     return 0
+        #
+        # larmatchFeat_u, larmatchFeat_v, larmatchFeat_y, deployDict['run'], deployDict['subrun'], deployDict['event'], meta = \
+        #                                              self.LArMatchNet.get_larmatch_features3D(self.currentEntry)
+        #
+        # deployDict['featureImages_v'] = [larmatchFeat_u, larmatchFeat_v, larmatchFeat_y]
+        # adc_v = self.iocv.get_data(larcv.kProductImage2D, "wire").Image2DArray()
+        # deployDict['wireImages_v'] = [larcv.as_ndarray(adc_v[p]) for p in range(3)]
+        # deployDict['meta'] = meta
+        # deployDict['seed3dPos'] = [neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]]
+        # deployDict['seedVoxelIdx'] = self.voxelator.getVoxelCoord(deployDict['seed3dPos'])
+
         neutrino_vertex = self.NeutrinoVertexer.getPos3DwSCE(self.ioll, self.SCEUBooNE)
 
         if is_inside_boundaries(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]) == False:
@@ -344,16 +356,35 @@ class DataLoader3D_Deploy:
                 print(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2], " Out of Bounds")
             return 0
 
-        larmatchFeat_u, larmatchFeat_v, larmatchFeat_y, deployDict['run'], deployDict['subrun'], deployDict['event'], meta = \
-                                                     self.LArMatchNet.get_larmatch_features3D(self.currentEntry)
 
-        deployDict['featureImages_v'] = [larmatchFeat_u, larmatchFeat_v, larmatchFeat_y]
+        larvoxfeats, run, subrun, event, meta = self.LArVoxelNet.get_larvoxel_features(self.currentEntry)
+
+        deployDict['larvoxfeats'] = larvoxfeats
         adc_v = self.iocv.get_data(larcv.kProductImage2D, "wire").Image2DArray()
         deployDict['wireImages_v'] = [larcv.as_ndarray(adc_v[p]) for p in range(3)]
         deployDict['meta'] = meta
         deployDict['seed3dPos'] = [neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]]
         deployDict['seedVoxelIdx'] = self.voxelator.getVoxelCoord(deployDict['seed3dPos'])
         return 1
+
+    def get_cropped_feats(self, larvoxfeats, voxelIdx, PARAMS):
+        # print("    ",voxelIdx)
+        shape = (PARAMS["PADDING"]*2+1,PARAMS["PADDING"]*2+1,PARAMS["PADDING"]*2+1,PARAMS['NFEATS'])
+        cropFeats = np.zeros(shape)
+        for featIdx in range(larvoxfeats.shape[0]):
+            featCoord = [int(larvoxfeats[featIdx,p]) for p in range(3)]
+            if featCoord[0] >= (voxelIdx[0]-PARAMS['PADDING']) and \
+               featCoord[0] <= voxelIdx[0]+PARAMS["PADDING"] and \
+               featCoord[1] >= voxelIdx[1]-PARAMS["PADDING"] and \
+               featCoord[1] <= voxelIdx[1]+PARAMS["PADDING"] and \
+               featCoord[2] >= voxelIdx[2]-PARAMS["PADDING"] and \
+               featCoord[2] <= voxelIdx[2]+PARAMS["PADDING"]:
+                x = int(featCoord[0] - (voxelIdx[0] - PARAMS["PADDING"]))
+                y = int(featCoord[1] - (voxelIdx[1] - PARAMS["PADDING"]))
+                z = int(featCoord[2] - (voxelIdx[2] - PARAMS["PADDING"]))
+                # print("        Adding from", larvoxfeats[featIdx,0:3], "to",x,y,z)
+                cropFeats[x,y,z,:] = larvoxfeats[featIdx,3:]
+        return cropFeats
 
     def load_dlreco_inputs_onestop_deploy_neutrinovtx(self, START_ENTRY, END_ENTRY, MAX_TRACKS_PULL = -1, run_backwards = False, is_val=True, showermode=False):
         training_data     = []
@@ -1383,143 +1414,143 @@ def mctrack_length(mctrack_in):
     return total_dist
 
 
-def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1):
-    truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
-    infile = PARAMS['INFILE']
-    iocv = None
-    LArMatchNet = None
-    if PARAMS['USE_CONV_IM'] == False:
-        iocv =  larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
-        iocv.set_verbosity(5)
-        iocv.reverse_all_products() # Do I need this?
-        iocv.add_in_file(infile)
-        iocv.initialize()
-    else:
-        LArMatchNet = LArMatchConvNet(PARAMS)
-    ioll = larlite.storage_manager(larlite.storage_manager.kREAD)
-    ioll.add_in_filename(infile)
-    ioll.open()
-
-    nentries_ll = ioll.get_entries()
-
-
-    full_image_list = []
-    ev_trk_xpt_list = []
-    ev_trk_ypt_list = []
-    runs = []
-    subruns   = []
-    events    = []
-    filepaths = []
-    entries   = []
-    track_pdgs= []
-
-    PDG_to_Part = {
-    2212:"PROTON",
-    2112:"NEUTRON",
-    211:"PIPLUS",
-    -211:"PIMINUS",
-    111:"PI0",
-    11:"ELECTRON",
-    -11:"POSITRON",
-    13:"MUON",
-    -13:"ANTIMUON",
-    }
-
-    if end_entry > nentries_ll or end_entry == -1:
-        end_entry = nentries_ll
-    if start_entry > end_entry or start_entry < 0:
-        start_entry = 0
-    for i in range(start_entry, end_entry):
-    # for i in range(8,9):
-        print()
-        print("Loading Entry:", i, "of range", start_entry, end_entry)
-        print()
-        if PARAMS['USE_CONV_IM'] == False:
-            iocv.read_entry(i)
-        ioll.go_to(i)
-
-        ev_mctrack = ioll.get_data(larlite.data.kMCTrack, "mcreco")
-        # Get Wire ADC Image to a Numpy Array
-        meta     = None
-        run      = -1
-        subrun   = -1
-        event    = -1
-        if PARAMS['USE_CONV_IM']:
-            y_wire_np, run, subrun, event, meta = LArMatchNet.get_larmatch_features(i)
-        else:
-            ev_wire    = iocv.get_data(larcv.kProductImage2D,"wire")
-            img_v = ev_wire.Image2DArray()
-            y_wire_image2d = img_v[2]
-            y_wire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
-            run = ev_wire.run()
-            subrun = ev_wire.subrun()
-            event = ev_wire.event()
-            meta = y_wire_image2d.meta()
-        full_image_list.append(np.copy(y_wire_np))
-        runs.append(run)
-        subruns.append(subrun)
-        events.append(event)
-        filepaths.append(infile)
-        entries.append(i)
-        # Get MC Track X Y Points
-
-        trk_xpt_list = []
-        trk_ypt_list = []
-        this_event_track_pdgs = []
-        trk_idx = -1
-        print("N Tracks", len(ev_mctrack))
-        for mctrack in ev_mctrack:
-            trk_idx += 1
-            if mctrack.PdgCode() not in PDG_to_Part or PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON"]:
-                continue
-            print("Track Index:",trk_idx)
-            if mctrack.PdgCode()  in PDG_to_Part:
-                print("     Track PDG:", PDG_to_Part[mctrack.PdgCode()])
-            else:
-                print("     Track PDG:", mctrack.PdgCode())
-            track_length = mctrack_length(mctrack)
-            print("     Track Length", track_length)
-            if track_length < 3.0:
-                print("Skipping Short Track")
-                continue
-            xpt_list = []
-            ypt_list = []
-            last_x   = 0
-            last_y   = 0
-            last_z   = 0
-            step_idx = -1
-            sce_track = truthtrack_SCE.applySCE(mctrack)
-            for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
-            # for mcstep in mctrack:
-                sce_step = sce_track.LocationAtPoint(pos_idx)
-                step_idx += 1
-                x = sce_step.X()
-                y = sce_step.Y()
-                z = sce_step.Z()
-                if is_inside_boundaries(x,y,z) == False:
-                    continue
-                if step_idx != 0:
-                    step_dist = ((x-last_x)**2 + (y-last_y)**2 + (z-last_z)**2)**0.5
-                    step_dist_3d.append(step_dist)
-                last_x = x
-                last_y = y
-                last_z = z
-                # if trk_idx == 6:
-                #     print(str(round(x)).zfill(4),str(round(y)).zfill(4),str(round(z)).zfill(4),str(round(t)).zfill(4))
-                col,row = getprojectedpixel(meta,x,y,z)
-                if len(xpt_list) !=0 and col == xpt_list[len(xpt_list)-1] and row == ypt_list[len(ypt_list)-1]:
-                    continue
-                xpt_list.append(col)
-                ypt_list.append(row)
-            trk_xpt_list.append(xpt_list)
-            trk_ypt_list.append(ypt_list)
-            this_event_track_pdgs.append(mctrack.PdgCode())
-        ev_trk_xpt_list.append(trk_xpt_list)
-        ev_trk_ypt_list.append(trk_ypt_list)
-        track_pdgs.append(this_event_track_pdgs)
-    ioll.close()
-    iocv.finalize()
-    return full_image_list, ev_trk_xpt_list, ev_trk_ypt_list, runs, subruns, events, filepaths, entries, track_pdgs
+# def load_rootfile_training(PARAMS, step_dist_3d, start_entry = 0, end_entry = -1):
+#     truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()
+#     infile = PARAMS['INFILE']
+#     iocv = None
+#     LArMatchNet = None
+#     if PARAMS['USE_CONV_IM'] == False:
+#         iocv =  larcv.IOManager(larcv.IOManager.kREAD,"io",larcv.IOManager.kTickBackward)
+#         iocv.set_verbosity(5)
+#         iocv.reverse_all_products() # Do I need this?
+#         iocv.add_in_file(infile)
+#         iocv.initialize()
+#     else:
+#         LArMatchNet = LArMatchConvNet(PARAMS)
+#     ioll = larlite.storage_manager(larlite.storage_manager.kREAD)
+#     ioll.add_in_filename(infile)
+#     ioll.open()
+#
+#     nentries_ll = ioll.get_entries()
+#
+#
+#     full_image_list = []
+#     ev_trk_xpt_list = []
+#     ev_trk_ypt_list = []
+#     runs = []
+#     subruns   = []
+#     events    = []
+#     filepaths = []
+#     entries   = []
+#     track_pdgs= []
+#
+#     PDG_to_Part = {
+#     2212:"PROTON",
+#     2112:"NEUTRON",
+#     211:"PIPLUS",
+#     -211:"PIMINUS",
+#     111:"PI0",
+#     11:"ELECTRON",
+#     -11:"POSITRON",
+#     13:"MUON",
+#     -13:"ANTIMUON",
+#     }
+#
+#     if end_entry > nentries_ll or end_entry == -1:
+#         end_entry = nentries_ll
+#     if start_entry > end_entry or start_entry < 0:
+#         start_entry = 0
+#     for i in range(start_entry, end_entry):
+#     # for i in range(8,9):
+#         print()
+#         print("Loading Entry:", i, "of range", start_entry, end_entry)
+#         print()
+#         if PARAMS['USE_CONV_IM'] == False:
+#             iocv.read_entry(i)
+#         ioll.go_to(i)
+#
+#         ev_mctrack = ioll.get_data(larlite.data.kMCTrack, "mcreco")
+#         # Get Wire ADC Image to a Numpy Array
+#         meta     = None
+#         run      = -1
+#         subrun   = -1
+#         event    = -1
+#         if PARAMS['USE_CONV_IM']:
+#             y_wire_np, run, subrun, event, meta = LArMatchNet.get_larmatch_features(i)
+#         else:
+#             ev_wire    = iocv.get_data(larcv.kProductImage2D,"wire")
+#             img_v = ev_wire.Image2DArray()
+#             y_wire_image2d = img_v[2]
+#             y_wire_np = larcv.as_ndarray(y_wire_image2d) # I am Speed.
+#             run = ev_wire.run()
+#             subrun = ev_wire.subrun()
+#             event = ev_wire.event()
+#             meta = y_wire_image2d.meta()
+#         full_image_list.append(np.copy(y_wire_np))
+#         runs.append(run)
+#         subruns.append(subrun)
+#         events.append(event)
+#         filepaths.append(infile)
+#         entries.append(i)
+#         # Get MC Track X Y Points
+#
+#         trk_xpt_list = []
+#         trk_ypt_list = []
+#         this_event_track_pdgs = []
+#         trk_idx = -1
+#         print("N Tracks", len(ev_mctrack))
+#         for mctrack in ev_mctrack:
+#             trk_idx += 1
+#             if mctrack.PdgCode() not in PDG_to_Part or PDG_to_Part[mctrack.PdgCode()] not in ["PROTON","MUON"]:
+#                 continue
+#             print("Track Index:",trk_idx)
+#             if mctrack.PdgCode()  in PDG_to_Part:
+#                 print("     Track PDG:", PDG_to_Part[mctrack.PdgCode()])
+#             else:
+#                 print("     Track PDG:", mctrack.PdgCode())
+#             track_length = mctrack_length(mctrack)
+#             print("     Track Length", track_length)
+#             if track_length < 3.0:
+#                 print("Skipping Short Track")
+#                 continue
+#             xpt_list = []
+#             ypt_list = []
+#             last_x   = 0
+#             last_y   = 0
+#             last_z   = 0
+#             step_idx = -1
+#             sce_track = truthtrack_SCE.applySCE(mctrack)
+#             for pos_idx  in range(sce_track.NumberTrajectoryPoints()):
+#             # for mcstep in mctrack:
+#                 sce_step = sce_track.LocationAtPoint(pos_idx)
+#                 step_idx += 1
+#                 x = sce_step.X()
+#                 y = sce_step.Y()
+#                 z = sce_step.Z()
+#                 if is_inside_boundaries(x,y,z) == False:
+#                     continue
+#                 if step_idx != 0:
+#                     step_dist = ((x-last_x)**2 + (y-last_y)**2 + (z-last_z)**2)**0.5
+#                     step_dist_3d.append(step_dist)
+#                 last_x = x
+#                 last_y = y
+#                 last_z = z
+#                 # if trk_idx == 6:
+#                 #     print(str(round(x)).zfill(4),str(round(y)).zfill(4),str(round(z)).zfill(4),str(round(t)).zfill(4))
+#                 col,row = getprojectedpixel(meta,x,y,z)
+#                 if len(xpt_list) !=0 and col == xpt_list[len(xpt_list)-1] and row == ypt_list[len(ypt_list)-1]:
+#                     continue
+#                 xpt_list.append(col)
+#                 ypt_list.append(row)
+#             trk_xpt_list.append(xpt_list)
+#             trk_ypt_list.append(ypt_list)
+#             this_event_track_pdgs.append(mctrack.PdgCode())
+#         ev_trk_xpt_list.append(trk_xpt_list)
+#         ev_trk_ypt_list.append(trk_ypt_list)
+#         track_pdgs.append(this_event_track_pdgs)
+#     ioll.close()
+#     iocv.finalize()
+#     return full_image_list, ev_trk_xpt_list, ev_trk_ypt_list, runs, subruns, events, filepaths, entries, track_pdgs
 
 def load_rootfile_deploy(filename, start_entry = 0, end_entry = -1, seed_MC=False):
     truthtrack_SCE = ublarcvapp.mctools.TruthTrackSCE()

@@ -28,7 +28,8 @@ class LSTMTagger(nn.Module):
 
         tag_space = self.hidden2tag(lstm_out.view(sequence.shape[0], -1))
         # tag_scores = F.log_softmax(tag_space, dim=1)
-        tag_scores = (1+torch.tanh(tag_space))/2
+        # tag_scores = (1+torch.tanh(tag_space))/2
+        tag_scores = torch.tanh(tag_space)
         endpoint_space = self.hidden2endpoint(lstm_out.view(sequence.shape[0],-1))
         endpoint_scores = F.log_softmax(endpoint_space, dim=1)
         # print("      Reg Softmax",F.softmax(endpoint_space, dim=1).detach().cpu().numpy())
@@ -100,7 +101,7 @@ def run_validation_pass(PARAMS, model, reformatloader, loss_function_next_step, 
                 # Get Endpoint Predictions in np
                 endpoint_pred_scores_np = np.argmax(endpoint_pred_scores_t.cpu().detach().numpy(),axis=1)
                 # Get Pred XYZ Shift in np, Rounded to ints for OffDist Calc
-                xyzShifts_pred_np = np.rint(xyzShifts_pred_t.cpu().detach().numpy())
+                xyzShifts_pred_np = xyzShifts_pred_t.cpu().detach().numpy()
                 xyzShifts_targ_t = torch.tensor(xyzShifts_targ_np).to(torch.device(PARAMS['DEVICE']))
 
                 # Calc loss and backward pass

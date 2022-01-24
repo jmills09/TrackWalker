@@ -204,8 +204,8 @@ class LArVoxelModel:
         sys.stdout.flush()
         voxcoords_np     = data["voxcoord"]
         voxfeats_np      = trackerNetFeats.cpu().detach().numpy()
-        print(voxcoords_np.shape,"voxcoords_np.shape")
-        print(voxfeats_np.shape,"voxfeats_np.shape")
+        # print(voxcoords_np.shape,"voxcoords_np.shape")
+        # print(voxfeats_np.shape,"voxfeats_np.shape")
         feats            =  np.concatenate((voxcoords_np,voxfeats_np),axis=1)
         print(feats.shape,"feats.shape")
         return feats, run, subrun, event, meta

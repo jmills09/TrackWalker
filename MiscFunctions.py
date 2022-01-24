@@ -325,11 +325,15 @@ def calc_logger_stats(log_stats_dict, PARAMS, np_pred, np_targ,
     return log_stats_dict
 
 
-def calc_logger_stats_distshifter(log_stats_dict, PARAMS, np_pred, np_targ,
+def calc_logger_stats_distshifter(log_stats_dict, PARAMS, np_pred_unscaled, np_targ_unscaled,
             loss_total, loss_endptnet, loss_stepnet,
             batch_size, endpt_pred, endpt_targ,
             is_train=True, is_epoch=True,no_prestring=False):
-
+    np_pred = np_pred_unscaled*PARAMS['CONVERT_OUT_TO_DIST']
+    np_targ = np_targ_unscaled*PARAMS['CONVERT_OUT_TO_DIST']
+    # print("Logger Stats:")
+    # for i in range(np_pred.shape[0]):
+    #     print(np_pred[i,:], np_targ[i,:], np_pred[i,:]-np_targ[i,:], np.sum((np_pred[i,:]-np_targ[i,:])*(np_pred[i,:]-np_targ[i,:]))**0.5)
     num_correct_endpoint = 0
     num_mislabeledas_endpoint = 0
     num_correct_exact = 0

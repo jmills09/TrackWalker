@@ -41,7 +41,7 @@ PARAMS = {}
 PARAMS['USE_CONV_IM'] = True
 # PARAMS['LARMATCH_CKPT'] = '/home/jmills/workdir/TrackWalker/larmatch_ckpt/checkpoint.1974000th.tar'
 # PARAMS['LARVOXEL_CKPT'] = '/home/jmills/workdir/TrackWalker/larvoxel_ckpt/checkpoint.101000th.tar'
-PARAMS['LARVOXEL_CKPT'] = '/home/jmills/workdir/TrackWalker/larvoxel_ckpt/lv.multidecoder.checkpoint.15000th.tar'
+PARAMS['LARVOXEL_CKPT'] = '/home/jmills/workdir/TrackWalker/larvoxel_ckpt/lv.multidecoder.weights.10600th.tar'
 
 
 PARAMS['LARVOX_CFG'] = '/home/jmills/workdir/ubdl_gen2/larflow/larmatchnet/config_voxelmultidecoder.yaml'
@@ -121,10 +121,10 @@ def main():
     args = parse_args()
 
 
-    # args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
-    # args.outdir       = "TEST3DReformat/"
-    # args.folderidx    = str(0)
-    # args.infileidx    = str(0)
+    args.infile       = "inputfiles/VAL_BnBOverLay_DLReco_Tracker.root"
+    args.outdir       = "TEST3DReformat/"
+    args.folderidx    = str(0)
+    args.infileidx    = str(0)
 
     print('Called with args:')
     print(args)
@@ -180,10 +180,10 @@ def main():
     entry_per_file = 9999
     Loader = LArVoxLoader(PARAMS)
     # iter = int(tot_entries/entry_per_file)+1
-    startEntry = 0
+    startEntry = 1
     Loader.currentEntry = startEntry
     endEntry = Loader.nentries_ll
-    # endEntry = 341
+    endEntry = 2
     for i in range(startEntry,endEntry):
         loadingDict = Loader.load_fancy()
 

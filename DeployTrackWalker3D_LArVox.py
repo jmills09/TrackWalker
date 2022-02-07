@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
+from larlite import larlite
 from MiscFunctions import get_loss_weights_v2, unflatten_pos, calc_logger_stats
 from MiscFunctions import make_log_stat_dict, reravel_array, make_prediction_vector
 from MiscFunctions import blockPrint, enablePrint, cropped_np, make_steps_images
@@ -34,6 +35,28 @@ def prepare_sequence_steps(seq,long=False):
     else:
         return torch.tensor(full_np, dtype=torch.long)
 
+def build_track(xs,ys,zs):
+
+    thisTrack = larlite.track()
+    npts = len(xs)
+    print("Building Track")
+    for pt in range(npts):
+        # if pt == 0:
+            # print(xs[pt],ys[pt],zs[pt],0)
+        # else:
+        #     dist = ((xs[pt] - xs[pt-1])**2 + (ys[pt] - ys[pt-1])**2 + (zs[pt] - zs[pt-1])**2)**0.5
+            # print(xs[pt],ys[pt],zs[pt],dist)
+        thisPT = ROOT.TVector3(xs[pt],ys[pt],zs[pt])
+        thisTrack.add_vertex(thisPT)
+        thisDir = 0
+        if pt != npts-1:
+            thisDir = ROOT.TVector3(xs[pt+1]-xs[pt],ys[pt+1]-ys[pt],zs[pt+1]-xs[pt])
+        else:
+            thisDir = ROOT.TVector3(xs[npts-1]-xs[npts-2],ys[npts-1]-ys[npts-2],zs[npts-1]-zs[npts-2])
+        thisTrack.add_direction(thisDir)
+    return thisTrack
+
+
 PARAMS = {}
 
 PARAMS['USE_CONV_IM'] = True
@@ -52,7 +75,7 @@ PARAMS['PADDING'] =10
 PARAMS['NDIMENSIONS'] = 3 #Not configured to have 3 yet.
 PARAMS['VOXCUBESIDE'] = 3
 PARAMS['NFEATS'] = 32
-PARAMS['EMBEDDING_DIM'] =(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)*PARAMS['NFEATS'] # N_Features
+PARAMS['EMBEDDING_DIM'] = (PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)*(PARAMS['PADDING']*2+1)*PARAMS['NFEATS'] # N_Features
 PARAMS['CENTERPOINT_ISEND'] = True
 PARAMS['NUM_CLASSES'] = PARAMS['VOXCUBESIDE']**3
 PARAMS['TRACKEND_CLASS'] = (PARAMS['NUM_CLASSES']-1)/2
@@ -83,9 +106,12 @@ PARAMS['CONVERT_OUT_TO_DIST'] = 6.0
 
 # PARAMS['MODEL_CHECKPOINT'] = "/home/jmills/workdir/TrackWalker/model_checkpoints/TrackerCheckPoint_1_Fin.pt"
 PARAMS['START_ENTRY'] = 1
-PARAMS['END_ENTRY'] = 20 #52
+PARAMS['END_ENTRY'] = 5 #52
 PARAMS['MAX_STEPS'] = 100
 # PARAMS['SHOWERMODE'] = False
+
+PARAMS['OUTROOTFILEDIR'] = "ROOTDeployFiles/"
+PARAMS['OUTROOTNAME'] ="" # If empty, save formatted based on input file name
 
 def main():
     print("Let's Get Started.")
@@ -125,6 +151,12 @@ def main():
 
     predictionProbFirstStep_h = ROOT.TH1D("predictionProbFirstStep_h", "predictionProbFirstStep_h",50,0.,1.)
 
+    output_storage_manager = larlite.storage_manager(larlite.storage_manager.kWRITE)
+    outputFileName = PARAMS["OUTROOTNAME"]
+    if outputFileName == "":
+        outputFileName = "TrackerNetOut_"+os.path.split(PARAMS['INFILE'])[1]
+    output_storage_manager.set_out_filename(PARAMS['OUTROOTFILEDIR']+outputFileName)
+    output_storage_manager.open()
 
     with torch.no_grad():
         model.eval()
@@ -135,7 +167,13 @@ def main():
         for i in range(PARAMS['START_ENTRY'],PARAMS['END_ENTRY']):
             deploy_idx += 1
             deployDict, passFlag = DataLoader.load_deploy_versatile(mode = deployMode, prongDict=prongDict)
+
+            output_storage_manager.set_id(deployDict['run'],deployDict['subrun'],deployDict['event'])
+            ev_track_out = output_storage_manager.get_data(larlite.data.kTrack, "RecoTrackNet")
+
+
             if passFlag == 0:
+                output_storage_manager.next_event()
                 continue
             start_time = time.time()
             # mask_im_v = [rewrite   np.ones((deployDict['larvoxfeats'][p].shape[0], deployDict['larvoxfeats'][p].shape[1] )) for p in range(3)]
@@ -167,6 +205,9 @@ def main():
 
                 np_pred_vtx = None
                 # Build Points for Track
+                xs = [current3dPos[0]]
+                ys = [current3dPos[1]]
+                zs = [current3dPos[2]]
                 while is_endpoint_score == False:
                     print(len(endpoint_scores_v))
                     # print("Running step", n_steps)
@@ -225,6 +266,11 @@ def main():
                     currentVoxIdx = [currentVoxIdx[p]+changeVoxIdx[p] for p in range(3)]
 
                     current3DPos = DataLoader.voxelator.get3dCoord(currentVoxIdx)
+                    # print("COORDS",current3DPos[0], current3DPos[1],current3DPos[2])
+                    xs.append(current3DPos[0])
+                    ys.append(current3DPos[1])
+                    zs.append(current3DPos[2])
+
                     centerImgCoords = getprojectedpixel(deployDict['meta'], current3DPos[0], current3DPos[1],current3DPos[2],True)
                     net_feats_in = DataLoader.get_cropped_feats(deployDict['larvoxfeats'],currentVoxIdx,PARAMS)
 
@@ -256,6 +302,10 @@ def main():
                 if not goodRecoProng:
                     print("This track suggestion didn't have high enough start prob, not saving.")
                     continue
+
+                # Save track to output root file:
+                thisTrack = build_track(xs,ys,zs)
+                ev_track_out.push_back(thisTrack)
 
                 # Save Ev Displays
                 # thistrack_dir=images_dir+'Deploy_'+str(entries_v[deploy_idx])+"_"+str(mctrack_idx_v[deploy_idx])+"_"+str(repeat)+"_"+str(runs_v[deploy_idx])+"_"+str(subruns_v[deploy_idx])+"_"+str(event_ids[deploy_idx])+"/"
@@ -306,6 +356,9 @@ def main():
             prongDict['recoProngs_h'].Fill(len(recoTrack_tgraphs_vv))
             prongDict['reco_m_mcProngs_h'].Fill(len(recoTrack_tgraphs_vv) - deployDict['mcProngs'])
             prongDict['reco_m_mcProngs_thresh_h'].Fill(len(recoTrack_tgraphs_vv) - deployDict['mcProngs_thresh'])
+            print("SAVING NEXT EVENT")
+            output_storage_manager.next_event()
+    output_storage_manager.close()
     dir = ''
     if deployMode == "MCNU_NUE":
         dir = 'prongPlots_nue/'

@@ -352,12 +352,18 @@ class DataLoader3D_Deploy:
         neutrino_vertex = self.NeutrinoVertexer.getPos3DwSCE(self.ioll, self.SCEUBooNE)
 
         if is_inside_boundaries(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2]) == False:
+            deployDict['run'] = self.iocv.get_data(larcv.kProductImage2D, "wire").run()
+            deployDict['subrun'] = self.iocv.get_data(larcv.kProductImage2D, "wire").subrun()
+            deployDict['event'] = self.iocv.get_data(larcv.kProductImage2D, "wire").event()
             if self.verbose:
                 print(neutrino_vertex[0],neutrino_vertex[1],neutrino_vertex[2], " Out of Bounds")
             return 0
 
 
         larvoxfeats, run, subrun, event, meta = self.LArVoxelNet.get_larvoxel_features(self.currentEntry)
+        deployDict['run'] = run
+        deployDict['subrun'] = subrun
+        deployDict['event'] = event
 
         deployDict['larvoxfeats'] = larvoxfeats
         adc_v = self.iocv.get_data(larcv.kProductImage2D, "wire").Image2DArray()

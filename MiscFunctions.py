@@ -558,7 +558,6 @@ def save_im_multitracks3D(filename, feats_v, recoTrack_tgraphs_vv, vertexImgCoor
     wires_v = [feats_v[p].copy() for p in range(3)]
     print(vertexImgCoords, "Cropping Final Image Around Vertex")
     croppedIm_v = [cropped_np(wires_v[p], vertexImgCoords[p+1], vertexImgCoords[0], crop_pad) for p in range(3)]
-    print(croppedIm_v[1])
     ROOT.gStyle.SetOptStat(0)
     x_len = croppedIm_v[0].shape[0]
     y_len = croppedIm_v[0].shape[1]
